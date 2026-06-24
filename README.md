@@ -44,16 +44,17 @@ Like the original project, this fork is licensed under **GPLv2.0**.
 
 ## 最大改动 / Biggest Change
 
-该分支最大的改动是**陀螺仪相关**的功能。有些游戏使用陀螺仪来模拟体感射击玩法，而原版 Azahar 无法做到这一点。
-The biggest change in this fork is **gyroscope/ motion controls**. Some games use gyroscope aiming, 
+该分支最大的改动是**陀螺仪相关**的功能。
+有些游戏使用陀螺仪来模拟体感射击玩法，而原版 Azahar 无法做到这一点。
+The biggest change in this fork is **gyroscope/ motion controls**.
+Some games use gyroscope aiming, 
 which the original Azahar doesn't support. This fork allows you to 
 control gyroscope rotation using just the **mouse and right analog stick**.
 
-> 鼠标在选中模拟器窗口时，会变为"对穿"模式穿透屏幕边界 —
-> 这是预期行为，用于体感瞄准时的无边界鼠标操作。
->
-> When the emulator window is focused, the mouse enters a "passthrough" mode — 
-> it traverses screen boundaries freely. This is intended for uninterrupted gyro-aiming.
+鼠标在选中模拟器窗口时，会变为"对穿"模式穿透屏幕边界,
+这是预期行为，用于体感瞄准时的无边界鼠标操作。
+When the emulator window is focused, the mouse enters a "passthrough" mode,
+it traverses screen boundaries freely. This is intended for uninterrupted gyro-aiming.
 
 ---
 

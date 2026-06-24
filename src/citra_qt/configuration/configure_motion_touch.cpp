@@ -173,6 +173,66 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
         }
     }
 
+    // Auto Y-tilt return speed
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Auto Y-tilt return speed:"), this));
+            motion_auto_tilt_y_return_speed = new QDoubleSpinBox(this);
+            motion_auto_tilt_y_return_speed->setRange(0.0, 100.0);
+            motion_auto_tilt_y_return_speed->setSingleStep(1.0);
+            motion_auto_tilt_y_return_speed->setDecimals(1);
+            motion_auto_tilt_y_return_speed->setSuffix(QStringLiteral(" °/s"));
+            motion_auto_tilt_y_return_speed->setValue(0.0);
+            motion_auto_tilt_y_return_speed->setToolTip(
+                tr("When no gyro input is active, gradually returns Y-axis tilt to Default Tilt at this speed.\n"
+                   "0 = disabled. Higher values snap back faster."));
+            row_layout->addWidget(motion_auto_tilt_y_return_speed);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Auto Y-tilt max accumulation angle
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Auto Y-tilt max angle:"), this));
+            motion_auto_tilt_y_max_angle = new QSpinBox(this);
+            motion_auto_tilt_y_max_angle->setRange(1, 180);
+            motion_auto_tilt_y_max_angle->setValue(180);
+            motion_auto_tilt_y_max_angle->setSuffix(QStringLiteral("°"));
+            motion_auto_tilt_y_max_angle->setToolTip(
+                tr("Limits how far Auto Y-tilt can deviate from Default Tilt.\n"
+                   "180° = unlimited. 25° = ±25° range around Default Tilt."));
+            row_layout->addWidget(motion_auto_tilt_y_max_angle);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Prevent Auto Y-tilt flip (keep tilt in [0°,180°] around default_tilt)
+    motion_auto_tilt_y_prevent_flip = new QCheckBox(tr("Prevent Auto Y-tilt flip"), this);
+    motion_auto_tilt_y_prevent_flip->setToolTip(
+        tr("Prevents Y-axis tilt from crossing vertical (0°/180°).\n"
+           "Based on Default Tilt, e.g. at 90°: limits range to [0°,180°];\n"
+           "at 45°: allows [0°,180°] relative to 45° tilt."));
+    motion_auto_tilt_y_prevent_flip->setChecked(true);
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_y_prevent_flip);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
     // [BETA] Auto X-axis tilt checkbox (default off)
     motion_auto_tilt_x = new QCheckBox(tr("[BETA] Auto X-axis tilt"), this);
     motion_auto_tilt_x->setToolTip(tr("BETA: Smoothly tilts the device left/right based on horizontal mouse movement. Returns to neutral when mouse stops"));
@@ -339,6 +399,11 @@ void ConfigureMotionTouch::SetConfiguration() {
     motion_auto_tilt_y_invert->setChecked(motion_param.Get("auto_tilt_y_invert", false));
     motion_auto_tilt_x->setChecked(motion_param.Get("auto_tilt_x", false));
     motion_auto_tilt_speed->setValue(static_cast<double>(motion_param.Get("auto_tilt_speed", 1.0f)));
+    motion_auto_tilt_y_return_speed->setValue(
+        static_cast<double>(motion_param.Get("auto_tilt_y_return_speed", 0.0f)));
+    motion_auto_tilt_y_max_angle->setValue(motion_param.Get("auto_tilt_y_max_angle", 180));
+    motion_auto_tilt_y_prevent_flip->setChecked(
+        motion_param.Get("auto_tilt_y_prevent_flip", true));
 
     // Controller-to-mouse linking
     link_cstick->setChecked(motion_param.Get("link_cstick", true));
@@ -386,6 +451,9 @@ void ConfigureMotionTouch::UpdateUiDisplay() {
     motion_auto_tilt_y_invert->setVisible(is_motion_emu);
     motion_auto_tilt_x->setVisible(is_motion_emu);
     motion_auto_tilt_speed->setVisible(is_motion_emu);
+    motion_auto_tilt_y_return_speed->setVisible(is_motion_emu);
+    motion_auto_tilt_y_max_angle->setVisible(is_motion_emu);
+    motion_auto_tilt_y_prevent_flip->setVisible(is_motion_emu);
     if (link_group)
         link_group->setVisible(is_motion_emu);
     // Disable update_period spinbox when per-frame sync is checked
@@ -624,6 +692,10 @@ void ConfigureMotionTouch::ApplyConfiguration() {
         motion_param.Set("auto_tilt_y_invert", motion_auto_tilt_y_invert->isChecked());
         motion_param.Set("auto_tilt_x", motion_auto_tilt_x->isChecked());
         motion_param.Set("auto_tilt_speed", static_cast<float>(motion_auto_tilt_speed->value()));
+        motion_param.Set("auto_tilt_y_return_speed",
+                         static_cast<float>(motion_auto_tilt_y_return_speed->value()));
+        motion_param.Set("auto_tilt_y_max_angle", motion_auto_tilt_y_max_angle->value());
+        motion_param.Set("auto_tilt_y_prevent_flip", motion_auto_tilt_y_prevent_flip->isChecked());
 
         // Controller-to-mouse linking
         motion_param.Set("link_cstick", link_cstick->isChecked());

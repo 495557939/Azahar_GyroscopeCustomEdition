@@ -474,6 +474,19 @@ void QtConfig::ReadControlValues() {
             {
                 Common::ParamPackage analog_pkg(profile.analogs[i]);
                 if (analog_pkg.Get("engine", "") == "analog_from_button") {
+                    // Move old-format keys (e.g. "up") to _0 multi-key format so
+                    // CreateMultiDevices picks them up when _count > 0.
+                    for (const auto* dir : {"up", "down", "left", "right"}) {
+                        const std::string val = analog_pkg.Get(dir, "");
+                        if (!val.empty()) {
+                            analog_pkg.Set(std::string(dir) + "_0", val);
+                            analog_pkg.Erase(dir);  // remove legacy single key
+                            analog_pkg.Set(std::string(dir) + "_count", 1);
+                        }
+                    }
+                    // Add SDL virtual controller stick defaults as secondary multi-key bindings.
+                    // Circle Pad (i=0) → gc_axis LeftX(0)/LeftY(1)
+                    // CStick   (i=1) → gc_axis RightX(2)/RightY(3)
                     const int axis_x = (i == 0) ? 0 : 2;
                     const int axis_y = (i == 0) ? 1 : 3;
                     auto add_sdl = [&](const std::string& dir, const std::string& sign,

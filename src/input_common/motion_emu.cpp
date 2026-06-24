@@ -24,7 +24,8 @@ public:
                     float tilt_max_angle, bool invert_pitch, bool invert_yaw, bool per_frame,
                     bool clamp_pitch_180,
                     bool auto_tilt_y, bool auto_tilt_y_invert, bool auto_tilt_x,
-                    float auto_tilt_speed)
+                    float auto_tilt_speed, float auto_tilt_y_return_speed,
+                    int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip)
         : update_millisecond(update_millisecond),
           update_duration(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
               std::chrono::milliseconds(update_millisecond))),
@@ -34,6 +35,9 @@ public:
           per_frame(per_frame), clamp_pitch_180(clamp_pitch_180),
           auto_tilt_y(auto_tilt_y), auto_tilt_y_invert(auto_tilt_y_invert),
           auto_tilt_x(auto_tilt_x), auto_tilt_speed(auto_tilt_speed),
+          auto_tilt_y_return_speed(auto_tilt_y_return_speed),
+          auto_tilt_y_max_angle(auto_tilt_y_max_angle),
+          auto_tilt_y_prevent_flip(auto_tilt_y_prevent_flip),
           q_accumulated(Common::MakeQuaternion(Common::Vec3<float>(), 0)),
           last_status_time(std::chrono::steady_clock::now()),
           last_rate_compute(std::chrono::steady_clock::now()),
@@ -156,6 +160,8 @@ public:
         std::lock_guard guard{tilt_mutex};
         rate_delta.x += dx;
         rate_delta.y += dy;
+        if (dx != 0.0f || dy != 0.0f)
+            last_mouse_input_time = std::chrono::steady_clock::now();
     }
 
     // SetTiltOffset: feed yaw/pitch radians for TiltContinuous / TiltHold gravity modes.
@@ -164,6 +170,7 @@ public:
         std::lock_guard guard{tilt_mutex};
         tilt_offset_yaw = yaw_rad;
         tilt_offset_pitch = pitch_rad;
+        last_mouse_input_time = std::chrono::steady_clock::now();
     }
 
     float GetTiltMaxAngle() const {
@@ -190,8 +197,17 @@ public:
                         if (auto_tilt_y) {
                             float sign = auto_tilt_y_invert ? 1.0f : -1.0f;
                             accumulated_tilt_pitch += sign * tilt_offset_pitch;
-                            accumulated_tilt_pitch = std::clamp(
-                                accumulated_tilt_pitch, -Common::PI / 4.0f, Common::PI / 4.0f);
+                            accumulated_tilt_pitch = ClampAutoTiltPitch(accumulated_tilt_pitch);
+                            // Only decay when mouse has been idle
+                            auto since_input = std::chrono::duration<float, std::milli>(
+                                now - last_mouse_input_time).count();
+                            if (auto_tilt_y_return_speed > 0.0f && since_input > 50.0f) {
+                                float step = auto_tilt_y_return_speed * Common::PI / 180.0f * (dt_ms / 1000.0f);
+                                if (accumulated_tilt_pitch > 0.0f)
+                                    accumulated_tilt_pitch = std::max(0.0f, accumulated_tilt_pitch - step);
+                                else if (accumulated_tilt_pitch < 0.0f)
+                                    accumulated_tilt_pitch = std::min(0.0f, accumulated_tilt_pitch + step);
+                            }
                             effective_tilt_rad += accumulated_tilt_pitch;
                         }
                         auto gravity =
@@ -257,6 +273,7 @@ public:
                             }
                         }
                         auto angular_rate = smoothed_rate;
+                        float raw_rate_x = angular_rate.x; // gate: pre-clamp rate
 
                         // Clamp pitch rotation to ±90° to prevent 3DS view flipping
                         if (clamp_pitch_180) {
@@ -277,16 +294,44 @@ public:
                         // Auto Y-tilt: accumulate pitch from angular rate
                         if (auto_tilt_y) {
                             float dt_sec = smoothed_dt_ms / 1000.0f;
-                            // RateContinuous produces small angular_rate (1-2 px/tick AddDelta)
-                            // vs RateHold's full-displacement TiltDelta. Internal gain of ~50×
-                            // brings the accumulation rate to a visible range without user tuning.
-                            // auto_tilt tracks gyro integration 1:1 (gain no longer needed, was 50x)
                             float sign_auto_y = auto_tilt_y_invert ? 1.0f : -1.0f;
-                            accumulated_tilt_pitch += sign_auto_y * angular_rate.x * dt_sec *
-                                                     Common::PI / 180.0f;  // 1:1 gyro tracking, no gain amp
-                            accumulated_tilt_pitch = std::clamp(
-                                accumulated_tilt_pitch, -Common::PI / 4.0f, Common::PI / 4.0f);
+                            float delta = sign_auto_y * angular_rate.x * dt_sec *
+                                          Common::PI / 180.0f;
+                            float new_atp = accumulated_tilt_pitch + delta;
+                            // User-configured limits (ClampAutoTiltPitch handles max angle + prevent_flip)
+                            new_atp = ClampAutoTiltPitch(new_atp);
+                            // If clamped, scale angular_rate.x to match the actual delta
+                            if (std::abs(new_atp - accumulated_tilt_pitch - delta) > 0.00001f) {
+                                if (std::abs(delta) > 0.00001f)
+                                    angular_rate.x *=
+                                        (new_atp - accumulated_tilt_pitch) / delta;
+                                else
+                                    angular_rate.x = 0.0f;
+                            }
+                            accumulated_tilt_pitch = new_atp;
+                            // Decay when user stops: adjust both gravity AND angular rate
+                            if (auto_tilt_y_return_speed > 0.0f && std::abs(raw_rate_x) < 0.5f) {
+                                float step = auto_tilt_y_return_speed * Common::PI / 180.0f * dt_sec;
+                                float old_atp = accumulated_tilt_pitch;
+                                if (accumulated_tilt_pitch > 0.0f)
+                                    accumulated_tilt_pitch = std::max(0.0f, accumulated_tilt_pitch - step);
+                                else if (accumulated_tilt_pitch < 0.0f)
+                                    accumulated_tilt_pitch = std::min(0.0f, accumulated_tilt_pitch + step);
+                                // Compensate angular_rate so the game camera rotates back
+                                // by the same amount that gravity changed
+                                float delta_atp = accumulated_tilt_pitch - old_atp;
+                                float sign_auto_y = auto_tilt_y_invert ? 1.0f : -1.0f;
+                                if (std::abs(sign_auto_y) > 0.0001f)
+                                    angular_rate.x += delta_atp * (180.0f / Common::PI) / dt_sec / sign_auto_y;
+                            }
                             effective_tilt_rad += accumulated_tilt_pitch;
+                        }
+                        // Decay accumulated_pitch toward 0 when idle (prevents permanent lock)
+                        if (std::abs(raw_rate_x) < 0.5f) {
+                            float dt_sec = smoothed_dt_ms / 1000.0f;
+                            float decay = std::min(30.0f * dt_sec, 1.0f);
+                            accumulated_pitch *= (1.0f - decay);
+                            if (std::abs(accumulated_pitch) < 0.1f) accumulated_pitch = 0.0f;
                         }
                         auto gravity =
                             Common::MakeVec(0.0f, -std::cos(effective_tilt_rad),
@@ -335,6 +380,9 @@ private:
     const bool auto_tilt_y_invert;
     const bool auto_tilt_x;
     const float auto_tilt_speed;
+    const float auto_tilt_y_return_speed;
+    const int auto_tilt_y_max_angle;
+    const bool auto_tilt_y_prevent_flip;
 
     Common::Vec2<int> mouse_origin;
 
@@ -353,7 +401,27 @@ private:
     float auto_roll_target = 0.0f;           // [BETA] Auto X-tilt: target roll angle (degrees)
     float tilt_offset_yaw = 0.0f;
     float tilt_offset_pitch = 0.0f;
+    std::chrono::steady_clock::time_point last_mouse_input_time;
     bool is_active = false;
+
+    // Clamp accumulated_tilt_pitch to user-configured limits
+    // Works correctly regardless of which direction accumulated corresponds to "up"
+    float ClampAutoTiltPitch(float val) const {
+        // 1. Max angle: ±min(auto_tilt_y_max_angle, tilt_max_angle) — symmetric
+        float at_max = auto_tilt_y_max_angle * Common::PI / 180.0f;
+        float tm_max = tilt_max_angle * Common::PI / 180.0f;
+        float max_rad = std::min(at_max, tm_max);
+        val = std::clamp(val, -max_rad, max_rad);
+        // 2. Prevent flip: keep effective = default_tilt + val within [0°, 180°]
+        //    effective = dt_rad + val ∈ [0, π]  →  val ∈ [−dt_rad, π−dt_rad]
+        if (auto_tilt_y_prevent_flip) {
+            float dt_rad = default_tilt * Common::PI / 180.0f;
+            float lo = -dt_rad;
+            float hi = Common::PI - dt_rad;
+            val = std::clamp(val, lo, hi);
+        }
+        return val;
+    }
 
     Common::Event shutdown_event;
 
@@ -384,7 +452,7 @@ private:
 
                 // Auto Y-tilt: accumulate per-frame rotation delta so gravity persists
                 if (auto_tilt_y) {
-                    float sign = auto_tilt_y_invert ? -1.0f : 1.0f;
+                    float sign = auto_tilt_y_invert ? 1.0f : -1.0f;
                     // q and old_q are the per-frame rotation quaternions;
                     // delta_q = q * old_q.Inverse() gives the frame-to-frame change.
                     // Only accumulate when there is actual rotation (prevents repeat adds when
@@ -438,8 +506,18 @@ private:
                     if (auto_tilt_y) {
                         float sign = auto_tilt_y_invert ? 1.0f : -1.0f;
                         accumulated_tilt_pitch += sign * pitch;
-                        accumulated_tilt_pitch = std::clamp(
-                            accumulated_tilt_pitch, -Common::PI / 4.0f, Common::PI / 4.0f);
+                        accumulated_tilt_pitch = ClampAutoTiltPitch(accumulated_tilt_pitch);
+                        // Only decay when mouse has been idle for a while
+                        auto since_input = std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - last_mouse_input_time).count();
+                        if (auto_tilt_y_return_speed > 0.0f && since_input > 50.0f) {
+                            float step = auto_tilt_y_return_speed * Common::PI / 180.0f *
+                                         (update_millisecond / 1000.0f);
+                            if (accumulated_tilt_pitch > 0.0f)
+                                accumulated_tilt_pitch = std::max(0.0f, accumulated_tilt_pitch - step);
+                            else if (accumulated_tilt_pitch < 0.0f)
+                                accumulated_tilt_pitch = std::min(0.0f, accumulated_tilt_pitch + step);
+                        }
                         effective_tilt_rad += accumulated_tilt_pitch;
                     }
                     auto gravity =
@@ -485,6 +563,8 @@ private:
                         rate_delta = Common::Vec2<float>{};
                     }
 
+                    float raw_rate_x = angular_rate.x; // gate: pre-clamp rate
+
                     // Clamp pitch rotation to ±90° to prevent 3DS view flipping
                     if (clamp_pitch_180) {
                         float dt_sec = update_millisecond / 1000.0f;
@@ -505,13 +585,39 @@ private:
                     if (auto_tilt_y) {
                         float dt_sec = update_millisecond / 1000.0f;
                         float sign = auto_tilt_y_invert ? 1.0f : -1.0f;
-                        // auto_tilt tracks gyro integration 1:1 (gain no longer needed, was 50x)
-                        // Thread Rate: auto-tilt tracks gyro 1:1
-                        accumulated_tilt_pitch += sign * angular_rate.x * dt_sec *
-                                                 Common::PI / 180.0f;
-                        accumulated_tilt_pitch = std::clamp(
-                            accumulated_tilt_pitch, -Common::PI / 4.0f, Common::PI / 4.0f);
+                        float delta = sign * angular_rate.x * dt_sec * Common::PI / 180.0f;
+                        float new_atp = accumulated_tilt_pitch + delta;
+                        // User-configured limits (ClampAutoTiltPitch handles max angle + prevent_flip)
+                        new_atp = ClampAutoTiltPitch(new_atp);
+                        // If clamped, scale angular_rate.x to match the actual delta
+                        if (std::abs(new_atp - accumulated_tilt_pitch - delta) > 0.00001f) {
+                            if (std::abs(delta) > 0.00001f)
+                                angular_rate.x *= (new_atp - accumulated_tilt_pitch) / delta;
+                            else
+                                angular_rate.x = 0.0f;
+                        }
+                        accumulated_tilt_pitch = new_atp;
+                        // Decay: adjust both gravity AND angular rate for camera sync
+                        if (auto_tilt_y_return_speed > 0.0f && std::abs(raw_rate_x) < 0.5f) {
+                            float step = auto_tilt_y_return_speed * Common::PI / 180.0f * dt_sec;
+                            float old_atp = accumulated_tilt_pitch;
+                            if (accumulated_tilt_pitch > 0.0f)
+                                accumulated_tilt_pitch = std::max(0.0f, accumulated_tilt_pitch - step);
+                            else if (accumulated_tilt_pitch < 0.0f)
+                                accumulated_tilt_pitch = std::min(0.0f, accumulated_tilt_pitch + step);
+                            float delta_atp = accumulated_tilt_pitch - old_atp;
+                            float sign_auto_y = auto_tilt_y_invert ? 1.0f : -1.0f;
+                            if (std::abs(sign_auto_y) > 0.0001f)
+                                angular_rate.x += delta_atp * (180.0f / Common::PI) / dt_sec / sign_auto_y;
+                        }
                         effective_tilt_rad += accumulated_tilt_pitch;
+                    }
+                    // Decay accumulated_pitch toward 0 when idle (prevents permanent lock)
+                    if (std::abs(raw_rate_x) < 0.5f) {
+                        float dt_sec = update_millisecond / 1000.0f;
+                        float decay = std::min(30.0f * dt_sec, 1.0f);
+                        accumulated_pitch *= (1.0f - decay);
+                        if (std::abs(accumulated_pitch) < 0.1f) accumulated_pitch = 0.0f;
                     }
                     auto gravity =
                         Common::MakeVec(0.0f, -std::cos(effective_tilt_rad),
@@ -551,14 +657,17 @@ public:
                            bool invert_pitch, bool invert_yaw, bool per_frame,
                            bool clamp_pitch_180,
                            bool auto_tilt_y, bool auto_tilt_y_invert, bool auto_tilt_x,
-                           float auto_tilt_speed) {
+                           float auto_tilt_speed, float auto_tilt_y_return_speed,
+                           int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip) {
         device = std::make_shared<MotionEmuDevice>(update_millisecond, sensitivity, tilt_clamp,
                                                     mode, deadzone, default_tilt,
                                                     tilt_max_angle,
                                                     invert_pitch, invert_yaw, per_frame,
                                                     clamp_pitch_180,
                                                     auto_tilt_y, auto_tilt_y_invert, auto_tilt_x,
-                                                    auto_tilt_speed);
+                                                    auto_tilt_speed, auto_tilt_y_return_speed,
+                                                    auto_tilt_y_max_angle,
+                                                    auto_tilt_y_prevent_flip);
     }
 
     bool IsDeviceActive() const {
@@ -621,6 +730,9 @@ std::unique_ptr<Input::MotionDevice> MotionEmu::Create(const Common::ParamPackag
     bool auto_tilt_y_invert = params.Get("auto_tilt_y_invert", false);
     bool auto_tilt_x = params.Get("auto_tilt_x", false);
     float auto_tilt_speed = params.Get("auto_tilt_speed", 1.0f);
+    float auto_tilt_y_return_speed = params.Get("auto_tilt_y_return_speed", 0.0f);
+    int auto_tilt_y_max_angle = params.Get("auto_tilt_y_max_angle", 180);
+    bool auto_tilt_y_prevent_flip = params.Get("auto_tilt_y_prevent_flip", true);
     MotionEmuMode mode = ParseMotionMode(params.Get("mode", "absolute"));
 
     current_mode = mode;
@@ -632,7 +744,10 @@ std::unique_ptr<Input::MotionDevice> MotionEmu::Create(const Common::ParamPackag
                                                                     invert_pitch, invert_yaw,
                                                                     per_frame, clamp_pitch_180,
                                                                     auto_tilt_y, auto_tilt_y_invert,
-                                                                    auto_tilt_x, auto_tilt_speed);
+                                                                    auto_tilt_x, auto_tilt_speed,
+                                                                    auto_tilt_y_return_speed,
+                                                                    auto_tilt_y_max_angle,
+                                                                    auto_tilt_y_prevent_flip);
     // Previously created device is disconnected here. Having two motion devices for 3DS is not
     // expected.
     current_device = device_wrapper->device;

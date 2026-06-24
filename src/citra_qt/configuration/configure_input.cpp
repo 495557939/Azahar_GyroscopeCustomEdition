@@ -111,15 +111,17 @@ static void SetAnalogButtonN(Common::ParamPackage& p, const std::string& dir, in
                              const Common::ParamPackage& input) {
     EnsureAnalogFromButton(p);
     int old_cnt = AnalogButtonCount(p, dir);
-    p.Set(dir + "_" + std::to_string(n), input.Serialize());
-    if (n + 1 > old_cnt) {
-        // Migrate legacy single key to multi-key format
-        if (old_cnt == 1 && n >= 1 && p.Has(dir)) {
-            p.Set(dir + "_0", p.Get(dir, ""));
-            p.Erase(dir);
-        }
-        p.Set(dir + "_count", n + 1);
+    // Migrate legacy single key to multi-key format on first multi-key use
+    if (old_cnt == 1 && !p.Has(dir + "_0") && p.Has(dir)) {
+        p.Set(dir + "_0", p.Get(dir, ""));
+        p.Erase(dir);
     }
+    p.Set(dir + "_" + std::to_string(n), input.Serialize());
+    int new_cnt = n + 1;
+    // Remove orphaned bindings beyond the new count
+    for (int i = new_cnt; i < old_cnt; i++)
+        p.Erase(dir + "_" + std::to_string(i));
+    p.Set(dir + "_count", new_cnt);
 }
 
 /// Erase the Nth binding and compact remaining bindings.
@@ -1074,7 +1076,17 @@ void ConfigureInput::RestoreDefaults() {
             QtConfig::default_analogs[analog_id][0], QtConfig::default_analogs[analog_id][1],
             QtConfig::default_analogs[analog_id][2], QtConfig::default_analogs[analog_id][3],
             QtConfig::default_analogs[analog_id][4], 0.5f)};
-        // Add SDL virtual controller stick defaults (same as config.cpp)
+        // Move old-format keys (e.g. "up") to _0 multi-key format so CreateMultiDevices
+        // picks them up when _count > 0. Skip "modifier" which may be empty.
+        for (const auto* dir : {"up", "down", "left", "right"}) {
+            const std::string val = analogs_param[analog_id].Get(dir, "");
+            if (!val.empty()) {
+                analogs_param[analog_id].Set(std::string(dir) + "_0", val);
+                analogs_param[analog_id].Erase(dir);
+                analogs_param[analog_id].Set(std::string(dir) + "_count", 1);
+            }
+        }
+        // Add SDL virtual controller stick defaults as secondary multi-key bindings.
         const int axis_x = (analog_id == 0) ? 0 : 2;
         const int axis_y = (analog_id == 0) ? 1 : 3;
         auto add_sdl = [&](const std::string& dir, const std::string& sign, int axis) {

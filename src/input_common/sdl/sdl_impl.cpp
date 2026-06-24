@@ -1146,7 +1146,7 @@ Common::ParamPackage SDLEventToButtonParamPackage(SDLState& state, const SDL_Eve
             params.Set("threshold", "0.5");
         } else {
             params.Set("direction", "-");
-            params.Set("threshold", "-0.5");
+            params.Set("threshold", "0.5");
         }
         break;
     }

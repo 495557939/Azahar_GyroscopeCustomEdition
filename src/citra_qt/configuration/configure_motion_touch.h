@@ -15,6 +15,7 @@ class QVBoxLayout;
 class QLabel;
 class QPushButton;
 class QDoubleSpinBox;
+class QSpinBox;
 class QCheckBox;
 class QTimer;
 
@@ -83,6 +84,9 @@ private:
     QCheckBox* motion_auto_tilt_y_invert = nullptr;
     QCheckBox* motion_auto_tilt_x = nullptr;
     QDoubleSpinBox* motion_auto_tilt_speed = nullptr;
+    QDoubleSpinBox* motion_auto_tilt_y_return_speed = nullptr;
+    QSpinBox* motion_auto_tilt_y_max_angle = nullptr;
+    QCheckBox* motion_auto_tilt_y_prevent_flip = nullptr;
 
     // Controller-to-mouse linking (only visible when motion provider is Mouse)
     QCheckBox* link_cstick = nullptr;

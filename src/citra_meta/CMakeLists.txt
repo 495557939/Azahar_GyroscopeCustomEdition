@@ -94,14 +94,6 @@ if (ENABLE_QT AND ENABLE_DISCORD_RPC)
     target_link_libraries(citra_meta PRIVATE discord-rpc)
 endif()
 
-# DiySC: Copy post-processing shaders to the executable output directory
-add_custom_command(TARGET citra_meta POST_BUILD
-    COMMAND ${CMAKE_COMMAND} -E copy_directory
-        "${PROJECT_SOURCE_DIR}/shadersGlsl"
-        "$<TARGET_FILE_DIR:citra_meta>/shadersGlsl"
-    COMMAND_EXPAND_LISTS
-)
-
 if(WIN32)
     # compile as a win32 gui application instead of a console application
     if(MSVC)

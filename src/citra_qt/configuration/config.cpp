@@ -60,17 +60,17 @@ const std::array<std::vector<std::string>, Settings::NativeButton::NumButtons> Q
 
 const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> QtConfig::default_analogs{{
     {
-        Qt::Key_Up,
-        Qt::Key_Down,
-        Qt::Key_Left,
-        Qt::Key_Right,
+        Qt::Key_W,
+        Qt::Key_S,
+        Qt::Key_A,
+        Qt::Key_D,
         0, // CircleMod: no default (user cleared)
     },
     {
-        Qt::Key_I,
-        Qt::Key_K,
-        Qt::Key_J,
-        Qt::Key_L,
+        Qt::Key_T,
+        Qt::Key_G,
+        Qt::Key_F,
+        Qt::Key_H,
         0, // CStickMod: no default (user cleared)
     },
 }};

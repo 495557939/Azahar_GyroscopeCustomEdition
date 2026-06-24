@@ -8,6 +8,9 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QWindow>
+#ifdef _WIN32
+#include <windows.h>
+#endif
 #include <algorithm>
 #include <unordered_map>
 #include "common/math_util.h"
@@ -742,58 +745,55 @@ void GRenderWindow::PollControllerLink() {
     if (!link_cstick && !link_circle && !link_dpad && !link_abxy)
         return;
 
-    const float link_speed = motion_param.Get("link_speed", 0.4f);
+    // Read base multiplier settings (default link_speed 1.0)
+    const float link_speed = motion_param.Get("link_speed", 1.0f);
 
     constexpr float DEADZONE = 0.15f;
     constexpr float STICK_BASE = 8.0f;
     constexpr float BUTTON_BASE = 4.0f;
 
-    // Direction → delta mapping for each 3DS button index
-    struct DirMap { float dx; float dy; };
-    static const std::unordered_map<int, DirMap> kDirMap = {
-        {Settings::NativeButton::A,     { 1.0f,  0.0f}},
-        {Settings::NativeButton::B,     { 0.0f,  1.0f}},
-        {Settings::NativeButton::X,     { 0.0f, -1.0f}},
-        {Settings::NativeButton::Y,     {-1.0f,  0.0f}},
-        {Settings::NativeButton::Up,    { 0.0f, -1.0f}},
-        {Settings::NativeButton::Down,  { 0.0f,  1.0f}},
-        {Settings::NativeButton::Left,  {-1.0f,  0.0f}},
-        {Settings::NativeButton::Right, { 1.0f,  0.0f}},
-    };
-
-    // Which 3DS buttons belong to which link category
-    auto IsLinked = [&](int btn) -> bool {
-        if (btn == Settings::NativeButton::A || btn == Settings::NativeButton::B ||
-            btn == Settings::NativeButton::X || btn == Settings::NativeButton::Y)
-            return link_abxy;
-        if (btn == Settings::NativeButton::Up || btn == Settings::NativeButton::Down ||
-            btn == Settings::NativeButton::Left || btn == Settings::NativeButton::Right)
-            return link_dpad;
-        return false;
-    };
-
-    // Check if a keyboard key is currently pressed (via event tracking)
-    auto IsKeyPressed = [this](int keycode) -> bool {
-        return pressed_keys.count(keycode) > 0;
-    };
-
     // Pre-open SDL controller for button/axis checks
     SDL_GameController* ctrl = nullptr;
-    int num_joy = SDL_NumJoysticks();
-    for (int idx = 0; idx < num_joy; ++idx) {
-        if (SDL_IsGameController(idx)) {
-            ctrl = SDL_GameControllerOpen(idx);
-            if (ctrl) break;
+    {
+        int num_joy = SDL_NumJoysticks();
+        for (int idx = 0; idx < num_joy; ++idx) {
+            if (SDL_IsGameController(idx)) {
+                ctrl = SDL_GameControllerOpen(idx);
+                if (ctrl) break;
+            }
         }
     }
 
-    // Helper: check if a ParamPackage binding is currently active
-    auto IsBindingActive = [&](const Common::ParamPackage& p) -> float {
+    // Helper: check single binding (keyboard code or SDL input)
+    auto CheckBinding = [&](const std::string& raw) -> float {
+        if (raw.empty()) return 0.0f;
+        Common::ParamPackage p(raw);
         const std::string engine = p.Get("engine", "");
         if (engine == "keyboard") {
             int code = p.Get("code", 0);
-            if (code > 0 && IsKeyPressed(code))
+            if (code > 0 && (pressed_keys.count(code) > 0))
                 return BUTTON_BASE;
+#ifdef _WIN32
+            // Fallback: Qt arrow keys may be swallowed by focus navigation
+            if (code > 0) {
+                int vk = code;
+                if (vk >= 0x1000000) { // Qt special-key range
+                    static const std::unordered_map<int, int> kQtToVk = {
+                        {0x01000013, VK_UP},    {0x01000015, VK_DOWN},
+                        {0x01000012, VK_LEFT},  {0x01000014, VK_RIGHT},
+                        {0x01000020, VK_SPACE}, {0x01000021, VK_NEXT},
+                        {0x01000022, VK_PRIOR}, {0x01000023, VK_END},
+                        {0x01000024, VK_HOME},  {0x01000007, VK_DELETE},
+                        {0x01000000, VK_ESCAPE},{0x01000001, VK_TAB},
+                        {0x01000005, VK_RETURN},{0x01000010, VK_MENU},
+                    };
+                    auto it = kQtToVk.find(vk);
+                    if (it != kQtToVk.end()) vk = it->second;
+                }
+                if (GetAsyncKeyState(vk) & 0x8000)
+                    return BUTTON_BASE;
+            }
+#endif
         } else if (engine == "sdl" && ctrl) {
             if (p.Has("gc_button")) {
                 int gc_btn = p.Get("gc_button", -1);
@@ -804,10 +804,12 @@ void GRenderWindow::PollControllerLink() {
             if (p.Has("gc_axis")) {
                 int gc_axis = p.Get("gc_axis", -1);
                 if (gc_axis >= 0) {
-                    float raw = SDL_GameControllerGetAxis(ctrl,
+                    float raw_v = SDL_GameControllerGetAxis(ctrl,
                         static_cast<SDL_GameControllerAxis>(gc_axis)) * (1.0f / 32768.0f);
-                    if (std::abs(raw) > DEADZONE)
-                        return raw * STICK_BASE;
+                    std::string dir = p.Get("direction", "");
+                    // Direction sign is a gate; return positive magnitude
+                    if (dir == "+" && raw_v > DEADZONE) return std::abs(raw_v) * STICK_BASE;
+                    if (dir == "-" && raw_v < -DEADZONE) return std::abs(raw_v) * STICK_BASE;
                 }
             }
             if (p.Has("hat")) {
@@ -816,7 +818,6 @@ void GRenderWindow::PollControllerLink() {
                 if (hat >= 0) {
                     Uint8 val = SDL_JoystickGetHat(
                         SDL_GameControllerGetJoystick(ctrl), hat);
-                    // Check each direction bit
                     if (dir == "up" && (val & SDL_HAT_UP)) return BUTTON_BASE;
                     if (dir == "down" && (val & SDL_HAT_DOWN)) return BUTTON_BASE;
                     if (dir == "left" && (val & SDL_HAT_LEFT)) return BUTTON_BASE;
@@ -826,11 +827,11 @@ void GRenderWindow::PollControllerLink() {
             if (p.Has("axis")) {
                 int axis = p.Get("axis", -1);
                 if (axis >= 0) {
-                    float raw = SDL_JoystickGetAxis(
+                    float raw_v = SDL_JoystickGetAxis(
                         SDL_GameControllerGetJoystick(ctrl), axis) * (1.0f / 32768.0f);
                     std::string dir = p.Get("direction", "");
-                    if (dir == "+" && raw > DEADZONE) return raw * STICK_BASE;
-                    if (dir == "-" && raw < -DEADZONE) return raw * STICK_BASE;
+                    if (dir == "+" && raw_v > DEADZONE) return std::abs(raw_v) * STICK_BASE;
+                    if (dir == "-" && raw_v < -DEADZONE) return std::abs(raw_v) * STICK_BASE;
                 }
             }
             if (p.Has("button")) {
@@ -843,37 +844,73 @@ void GRenderWindow::PollControllerLink() {
         return 0.0f;
     };
 
+    // Helper: read direction deltas from an analog ParamPackage.
+    // Supports multi-bindings (up, up_1, up_2, ...) for keyboard + SDL coexistence.
+    auto ReadAnalogDir = [&](const std::string& analog_param, float& dx, float& dy) -> bool {
+        Common::ParamPackage ap(analog_param);
+        auto BestForDir = [&](const std::string& base) -> float {
+            float best = 0.0f;
+            float s = CheckBinding(ap.Get(base, ""));
+            if (s > best) best = s;
+            // Multi-binding: check _1, _2, ... up to _count or a reasonable limit
+            for (int i = 1; i <= 4; ++i) {
+                s = CheckBinding(ap.Get(base + "_" + std::to_string(i), ""));
+                if (s > best) best = s;
+            }
+            return best;
+        };
+        float right_s = BestForDir("right");
+        float left_s  = BestForDir("left");
+        float down_s  = BestForDir("down");
+        float up_s    = BestForDir("up");
+        dx = right_s - left_s;
+        dy = down_s - up_s;
+        return (std::abs(dx) > 0.001f || std::abs(dy) > 0.001f);
+    };
+
     float total_dx = 0.0f, total_dy = 0.0f;
 
-    // For C-Stick / Circle Pad analog link: read raw SDL axes directly
-    // (these map gamepad sticks directly to deltas regardless of bindings)
-    if (ctrl) {
-        auto ReadAxis = [](SDL_GameController* c, SDL_GameControllerAxis a) -> float {
-            float v = SDL_GameControllerGetAxis(c, a) * (1.0f / 32768.0f);
-            return (std::abs(v) > DEADZONE) ? v : 0.0f;
-        };
-        if (link_cstick) {
-            total_dx += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_RIGHTX) * STICK_BASE;
-            total_dy += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_RIGHTY) * STICK_BASE;
-        }
-        if (link_circle) {
-            total_dx += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_LEFTX) * STICK_BASE;
-            total_dy += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_LEFTY) * STICK_BASE;
-        }
+    // Read C-Stick / Circle Pad from analog profile (supports keyboard + SDL bindings)
+    const auto& profile = Settings::values.current_input_profile;
+    float adx = 0.0f, ady = 0.0f;
+    if (link_cstick && ReadAnalogDir(profile.analogs[Settings::NativeAnalog::CStick], adx, ady)) {
+        total_dx += adx;
+        total_dy += ady;
+    }
+    if (link_circle && ReadAnalogDir(profile.analogs[Settings::NativeAnalog::CirclePad], adx, ady)) {
+        total_dx += adx;
+        total_dy += ady;
     }
 
-    // For digital buttons (ABXY, DPad): check ALL bindings from input profile
-    const auto& profile = Settings::values.current_input_profile;
+    // Read D-Pad / ABXY from button profile
+    struct DirMap { float dx; float dy; };
+    static const std::unordered_map<int, DirMap> kDirMap = {
+        {Settings::NativeButton::A,     { 1.0f,  0.0f}},
+        {Settings::NativeButton::B,     { 0.0f,  1.0f}},
+        {Settings::NativeButton::X,     { 0.0f, -1.0f}},
+        {Settings::NativeButton::Y,     {-1.0f,  0.0f}},
+        {Settings::NativeButton::Up,    { 0.0f, -1.0f}},
+        {Settings::NativeButton::Down,  { 0.0f,  1.0f}},
+        {Settings::NativeButton::Left,  {-1.0f,  0.0f}},
+        {Settings::NativeButton::Right, { 1.0f,  0.0f}},
+    };
+    auto IsLinked = [&](int btn) -> bool {
+        if (btn == Settings::NativeButton::A || btn == Settings::NativeButton::B ||
+            btn == Settings::NativeButton::X || btn == Settings::NativeButton::Y)
+            return link_abxy;
+        if (btn == Settings::NativeButton::Up || btn == Settings::NativeButton::Down ||
+            btn == Settings::NativeButton::Left || btn == Settings::NativeButton::Right)
+            return link_dpad;
+        return false;
+    };
     for (int btn = 0; btn < Settings::NativeButton::NumButtons; ++btn) {
         if (!IsLinked(btn)) continue;
         auto it = kDirMap.find(btn);
         if (it == kDirMap.end()) continue;
-
         float strength = 0.0f;
         for (const auto& binding_str : profile.buttons[btn]) {
-            Common::ParamPackage p(binding_str);
-            float s = IsBindingActive(p);
-            if (s > strength) strength = s; // take strongest active binding
+            float s = CheckBinding(binding_str);
+            if (s > strength) strength = s;
         }
         if (strength > 0.0f) {
             total_dx += it->second.dx * strength;

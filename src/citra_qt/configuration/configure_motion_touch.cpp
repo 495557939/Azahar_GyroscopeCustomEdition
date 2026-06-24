@@ -247,7 +247,7 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
         link_speed->setRange(0.1, 10.0);
         link_speed->setSingleStep(0.1);
         link_speed->setDecimals(1);
-        link_speed->setValue(0.4);
+        link_speed->setValue(1.0);
         link_speed->setToolTip(tr("Multiplier for controller-link virtual mouse delta.\n"
                                   "Higher = faster aiming with controller"));
         speed_row->addWidget(link_speed);
@@ -345,7 +345,7 @@ void ConfigureMotionTouch::SetConfiguration() {
     link_circle_pad->setChecked(motion_param.Get("link_circle_pad", false));
     link_dpad->setChecked(motion_param.Get("link_dpad", false));
     link_abxy->setChecked(motion_param.Get("link_abxy", false));
-    link_speed->setValue(static_cast<double>(motion_param.Get("link_speed", 0.4f)));
+    link_speed->setValue(static_cast<double>(motion_param.Get("link_speed", 1.0f)));
 
     guid = motion_param.Get("guid", "0");
     port = motion_param.Get("port", 0);

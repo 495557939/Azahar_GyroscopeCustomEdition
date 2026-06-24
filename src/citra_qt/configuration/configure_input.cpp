@@ -24,6 +24,7 @@
 #include "common/param_package.h"
 #include "core/core.h"
 #include "ui_configure_input.h"
+#include "input_common/keyboard.h"
 
 const std::array<std::string, ConfigureInput::ANALOG_SUB_BUTTONS_NUM>
     ConfigureInput::analog_sub_buttons{{
@@ -1535,6 +1536,10 @@ void ConfigureInput::HandleClick(QPushButton* button,
 
     grabKeyboard();
     grabMouse();
+    // Clear any stuck keys from previous dialog interactions
+    if (auto* kb = InputCommon::GetKeyboard(); kb) {
+        kb->ReleaseAllKeys();
+    }
     timeout_timer->start(5000); // Cancel after 5 seconds
     poll_timer->start(200);     // Check for new inputs every 200ms
 }
@@ -1542,6 +1547,10 @@ void ConfigureInput::HandleClick(QPushButton* button,
 void ConfigureInput::SetPollingResult(const Common::ParamPackage& params, bool abort) {
     releaseKeyboard();
     releaseMouse();
+    // Clear any key states that may have been set during the grab
+    if (auto* kb = InputCommon::GetKeyboard(); kb) {
+        kb->ReleaseAllKeys();
+    }
     timeout_timer->stop();
     poll_timer->stop();
     for (auto& poller : device_pollers) {

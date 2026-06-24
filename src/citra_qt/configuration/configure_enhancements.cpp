@@ -263,11 +263,8 @@ void ConfigureEnhancements::ApplyConfiguration() {
         Settings::values.pp_shader_name =
             ui->shader_combobox->itemText(ui->shader_combobox->currentIndex()).toStdString();
         auto save_filter_slot = [&](int idx, Settings::Setting<std::string>& setting) {
-            if (idx >= 0 && idx < 9 && filter_slots[idx]) {
-                if (filter_slots[idx]->isVisible())
-                    setting.SetValue(filter_slots[idx]->currentText().toStdString());
-                // Hidden slots: keep whatever value was already set (don't force "None")
-            }
+            if (idx >= 0 && idx < 9 && filter_slots[idx])
+                setting.SetValue(filter_slots[idx]->currentText().toStdString());
         };
         save_filter_slot(0, Settings::values.pp_shader_name_2);
         save_filter_slot(1, Settings::values.pp_shader_name_3);

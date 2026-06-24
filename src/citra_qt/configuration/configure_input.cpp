@@ -23,6 +23,7 @@
 #include "citra_qt/configuration/configure_motion_touch.h"
 #include "common/param_package.h"
 #include "core/core.h"
+#include "core/hle/service/hid/hid.h"
 #include "ui_configure_input.h"
 #include "input_common/keyboard.h"
 
@@ -506,6 +507,61 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                             ApplyConfiguration();
                             Settings::SaveProfile(ui->profile->currentIndex());
                         });
+                        context_menu.addSeparator();
+                        // Turbo / Toggle — always show menu for buttons that have bindings
+                        {
+                            bool has_binding = false;
+                            for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                if (!buttons_param[button_id][s].Serialize().empty())
+                                    has_binding = true;
+                            if (has_binding) {
+                            bool is_turbo = (slot < (int)buttons_param[button_id].size() &&
+                                buttons_param[button_id][slot].Get("turbo", "0") == "1");
+                            // Toggle is per-button: check ALL slots
+                            bool is_toggle = false;
+                            for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                if (buttons_param[button_id][s].Get("toggle", "0") == "1")
+                                    is_toggle = true;
+                            if (is_turbo) {
+                                context_menu.addAction(tr("Cancel Turbo"), this, [=] {
+                                    buttons_param[button_id][slot].Erase("turbo");
+                                    UpdateButtonColor(button_id, slot);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else if (is_toggle) {
+                                context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                    // Erase toggle from ALL slots
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                        buttons_param[button_id][s].Erase("toggle");
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else {
+                                context_menu.addAction(tr("Set Turbo"), this, [=] {
+                                    buttons_param[button_id][slot].Erase("toggle");
+                                    buttons_param[button_id][slot].Set("turbo", "1");
+                                    UpdateButtonColor(button_id, slot);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                                context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                    // Set toggle on ALL slots (per-button toggle)
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++) {
+                                        buttons_param[button_id][s].Erase("turbo");
+                                        buttons_param[button_id][s].Set("toggle", "1");
+                                    }
+                                    // Update ALL slot colors
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            }
+                            } // if (has_binding)
+                        }
                         context_menu.exec(
                             button_map[button_id][slot]->mapToGlobal(menu_location));
                     });
@@ -604,6 +660,48 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                             addMouseAction(
                                 tr("Mouse: Wheel Down"),
                                 {{"engine", "mouse"}, {"axis", "wheel"}, {"value", "down"}});
+                            context_menu.addSeparator();
+                            // Turbo / Toggle for analog directions
+                            {
+                                const auto& dir = analog_sub_buttons[sub_button_id];
+                                int cnt = AnalogButtonCount(analogs_param[analog_id], dir);
+                                if (cnt > 0 && slot < cnt) {
+                                    std::string turbo_key = dir + "_turbo";
+                                    std::string toggle_key = dir + "_toggle";
+                                    bool is_turbo = analogs_param[analog_id].Get(turbo_key, "0") == "1";
+                                    bool is_toggle = analogs_param[analog_id].Get(toggle_key, "0") == "1";
+                                    if (is_turbo) {
+                                        context_menu.addAction(tr("Cancel Turbo"), this, [=] {
+                                            analogs_param[analog_id].Erase(turbo_key);
+                                            UpdateAnalogButtonColor(analog_id, sub_button_id);
+                                            ApplyConfiguration();
+                                            Settings::SaveProfile(ui->profile->currentIndex());
+                                        });
+                                    } else if (is_toggle) {
+                                        context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                            analogs_param[analog_id].Erase(toggle_key);
+                                            UpdateAnalogButtonColor(analog_id, sub_button_id);
+                                            ApplyConfiguration();
+                                            Settings::SaveProfile(ui->profile->currentIndex());
+                                        });
+                                    } else {
+                                        context_menu.addAction(tr("Set Turbo"), this, [=] {
+                                            analogs_param[analog_id].Erase(toggle_key);
+                                            analogs_param[analog_id].Set(turbo_key, "1");
+                                            UpdateAnalogButtonColor(analog_id, sub_button_id);
+                                            ApplyConfiguration();
+                                            Settings::SaveProfile(ui->profile->currentIndex());
+                                        });
+                                        context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                            analogs_param[analog_id].Erase(turbo_key);
+                                            analogs_param[analog_id].Set(toggle_key, "1");
+                                            UpdateAnalogButtonColor(analog_id, sub_button_id);
+                                            ApplyConfiguration();
+                                            Settings::SaveProfile(ui->profile->currentIndex());
+                                        });
+                                    }
+                                }
+                            }
                             context_menu.exec(
                                 analog_map_buttons[analog_id][sub_button_id][slot]->mapToGlobal(
                                     menu_location));
@@ -943,6 +1041,13 @@ void ConfigureInput::ApplyConfiguration() {
 
     // Sync memory profile back to the input_profiles array so config->Save() persists it
     Settings::SaveProfile(Settings::values.current_input_profile_index);
+
+    // Trigger reload so turbo/toggle wrappers take effect immediately
+    if (system.IsPoweredOn()) {
+        auto hid = Service::HID::GetModule(system);
+        if (hid)
+            hid->ReloadInputDevices();
+    }
 }
 
 void ConfigureInput::ApplyProfile() {
@@ -1281,6 +1386,58 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
                                 Common::ParamPackage{"engine:mouse,axis:wheel,value:down"};
                             UpdateMultiKeySlots(button_id);
                         });
+                        context_menu.addSeparator();
+                        // Turbo / Toggle — always show menu for buttons that have bindings
+                        {
+                            bool has_binding = false;
+                            for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                if (!buttons_param[button_id][s].Serialize().empty())
+                                    has_binding = true;
+                            if (has_binding) {
+                            bool is_turbo = (slotCapture < (int)buttons_param[button_id].size() &&
+                                buttons_param[button_id][slotCapture].Get("turbo", "0") == "1");
+                            // Toggle is per-button: check ALL slots
+                            bool is_toggle = false;
+                            for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                if (buttons_param[button_id][s].Get("toggle", "0") == "1")
+                                    is_toggle = true;
+                            if (is_turbo) {
+                                context_menu.addAction(tr("Cancel Turbo"), this, [=] {
+                                    buttons_param[button_id][slotCapture].Erase("turbo");
+                                    UpdateButtonColor(button_id, slotCapture);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else if (is_toggle) {
+                                context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                        buttons_param[button_id][s].Erase("toggle");
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else {
+                                context_menu.addAction(tr("Set Turbo"), this, [=] {
+                                    buttons_param[button_id][slotCapture].Erase("toggle");
+                                    buttons_param[button_id][slotCapture].Set("turbo", "1");
+                                    UpdateButtonColor(button_id, slotCapture);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                                context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++) {
+                                        buttons_param[button_id][s].Erase("turbo");
+                                        buttons_param[button_id][s].Set("toggle", "1");
+                                    }
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            }
+                            } // if (has_binding)
+                        }
                         context_menu.exec(QCursor::pos());
                     });
         }
@@ -1332,6 +1489,31 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
 
     if (container)
         container->setVisible(needExtras);
+
+    // Update colors for all slots
+    for (int slot = 0; slot < (int)button_map[button_id].size(); slot++)
+        UpdateButtonColor(button_id, slot);
+}
+
+void ConfigureInput::UpdateButtonColor(int button_id, int slot) {
+    if (slot >= (int)buttons_param[button_id].size()) {
+        if (slot < (int)button_map[button_id].size())
+            button_map[button_id][slot]->setStyleSheet({});
+        return;
+    }
+    const auto& pkg = buttons_param[button_id][slot];
+    bool is_turbo = pkg.Get("turbo", "0") == "1";
+    bool is_toggle = pkg.Get("toggle", "0") == "1";
+    if (slot < (int)button_map[button_id].size()) {
+        if (is_turbo)
+            button_map[button_id][slot]->setStyleSheet(
+                QStringLiteral("background-color: #2e7d32; color: white;"));
+        else if (is_toggle)
+            button_map[button_id][slot]->setStyleSheet(
+                QStringLiteral("background-color: #1565c0; color: white;"));
+        else
+            button_map[button_id][slot]->setStyleSheet({});
+    }
 }
 
 void ConfigureInput::SetupAnalogMultiKeySlots(int analog_id, int sub_button_id) {
@@ -1419,6 +1601,26 @@ void ConfigureInput::UpdateAnalogMultiKeySlots(int analog_id, int sub_button_id)
         } else {
             if (slot > 0) btn->hide();
         }
+    }
+    // Update colors for analog direction buttons
+    UpdateAnalogButtonColor(analog_id, sub_button_id);
+}
+
+void ConfigureInput::UpdateAnalogButtonColor(int analog_id, int sub_button_id) {
+    const auto& dir = analog_sub_buttons[sub_button_id];
+    std::string turbo_key = dir + "_turbo";
+    std::string toggle_key = dir + "_toggle";
+    bool is_turbo = analogs_param[analog_id].Get(turbo_key, "0") == "1";
+    bool is_toggle = analogs_param[analog_id].Get(toggle_key, "0") == "1";
+    for (int slot = 0; slot < (int)analog_map_buttons[analog_id][sub_button_id].size(); slot++) {
+        auto* btn = analog_map_buttons[analog_id][sub_button_id][slot];
+        if (!btn) continue;
+        if (is_turbo)
+            btn->setStyleSheet(QStringLiteral("background-color: #2e7d32; color: white;"));
+        else if (is_toggle)
+            btn->setStyleSheet(QStringLiteral("background-color: #1565c0; color: white;"));
+        else
+            btn->setStyleSheet({});
     }
 }
 

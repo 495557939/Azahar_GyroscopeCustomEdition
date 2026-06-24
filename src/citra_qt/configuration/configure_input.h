@@ -155,6 +155,9 @@ private:
     void SetupMultiKeySlots(int button_id);
     /// Update visibility and text of all binding slots for a button.
     void UpdateMultiKeySlots(int button_id);
+    /// Update button background colour based on turbo / toggle flags.
+    void UpdateButtonColor(int button_id, int slot);
+    void UpdateAnalogButtonColor(int analog_id, int sub_button_id);
 
     /// Setup multi-key UI slots for an analog direction button.
     void SetupAnalogMultiKeySlots(int analog_id, int sub_button_id);

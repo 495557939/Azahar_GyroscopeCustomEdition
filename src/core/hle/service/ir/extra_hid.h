@@ -75,7 +75,9 @@ private:
     Core::TimingEventType* hid_polling_callback_id;
     std::array<u8, 0x40> calibration_data;
     std::vector<std::unique_ptr<Input::ButtonDevice>> zl;
+    bool zl_toggle = false;
     std::vector<std::unique_ptr<Input::ButtonDevice>> zr;
+    bool zr_toggle = false;
     std::unique_ptr<Input::AnalogDevice> c_stick;
     std::atomic<bool> is_device_reload_pending;
 

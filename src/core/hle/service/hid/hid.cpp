@@ -10,6 +10,7 @@
 #include <boost/serialization/unique_ptr.hpp>
 #include "common/archives.h"
 #include "common/logging/log.h"
+#include "common/param_package.h"
 #include "core/3ds.h"
 #include "core/core.h"
 #include "core/hle/ipc_helpers.h"
@@ -18,6 +19,7 @@
 #include "core/hle/kernel/shared_memory.h"
 #include "core/hle/kernel/shared_page.h"
 #include "core/hle/service/hid/hid.h"
+#include "input_common/button_mods.h"
 #include "core/hle/service/hid/hid_spvr.h"
 #include "core/hle/service/hid/hid_user.h"
 #include "core/hle/service/ir/ir_rst.h"
@@ -119,10 +121,20 @@ void Module::LoadInputDevices() {
     // Multi-key mapping: create devices for all bindings per button
     for (int i = 0; i < Settings::NativeButton::NUM_BUTTONS_HID; ++i) {
         buttons[i].clear();
+        button_toggle[i] = false;
         for (const auto& bind : Settings::values.current_input_profile.buttons[
                  i + Settings::NativeButton::BUTTON_HID_BEGIN]) {
             if (!bind.empty()) {
-                buttons[i].push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+                auto dev = Input::CreateDevice<Input::ButtonDevice>(bind);
+                if (dev) {
+                    Common::ParamPackage pkg(bind);
+                    if (pkg.Get("toggle", "0") == "1") {
+                        button_toggle[i] = true;  // whole-button toggle
+                    } else if (pkg.Get("turbo", "0") == "1") {
+                        dev = std::make_unique<InputCommon::TurboButton>(std::move(dev));
+                    }
+                    buttons[i].push_back(std::move(dev));
+                }
             }
         }
     }
@@ -210,10 +222,14 @@ void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
     } else {
         // Multi-key mapping: OR all bindings per button
         auto getButtonState = [this](int idx) -> bool {
+            bool raw = false;
             for (const auto& dev : buttons[idx]) {
-                if (dev->GetStatus()) return true;
+                if (dev->GetStatus()) {
+                    raw = true;
+                    break;
+                }
             }
-            return false;
+            return button_toggle[idx] ? !raw : raw;
         };
         state.a.Assign(getButtonState(A - BUTTON_HID_BEGIN));
         state.b.Assign(getButtonState(B - BUTTON_HID_BEGIN));

@@ -4,10 +4,12 @@
 
 #include <fmt/ranges.h>
 #include "common/alignment.h"
+#include "common/param_package.h"
 #include "common/settings.h"
 #include "core/core_timing.h"
 #include "core/hle/service/hid/hid.h"
 #include "core/hle/service/ir/extra_hid.h"
+#include "input_common/button_mods.h"
 #include "core/movie.h"
 
 namespace Service::IR {
@@ -270,7 +272,9 @@ void ExtraHID::SendHIDStatus() {
         // Multi-key mapping: OR all bindings
         bool zl_held = false, zr_held = false;
         for (const auto& dev : zl) { if (dev->GetStatus()) { zl_held = true; break; } }
+        if (zl_toggle) zl_held = !zl_held;
         for (const auto& dev : zr) { if (dev->GetStatus()) { zr_held = true; break; } }
+        if (zr_toggle) zr_held = !zr_held;
         response.buttons.zl_not_held.Assign(!zl_held);
         response.buttons.zr_not_held.Assign(!zr_held);
         response.buttons.r_not_held.Assign(1);
@@ -291,14 +295,34 @@ void ExtraHID::RequestInputDevicesReload() {
 void ExtraHID::LoadInputDevices() {
     // Multi-key mapping: create devices for all bindings per button
     zl.clear();
+    zl_toggle = false;
     for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]) {
-        if (!bind.empty())
-            zl.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+        if (!bind.empty()) {
+            auto dev = Input::CreateDevice<Input::ButtonDevice>(bind);
+            if (dev) {
+                Common::ParamPackage pkg(bind);
+                if (pkg.Get("toggle", "0") == "1")
+                    zl_toggle = true;
+                else if (pkg.Get("turbo", "0") == "1")
+                    dev = std::make_unique<InputCommon::TurboButton>(std::move(dev));
+                zl.push_back(std::move(dev));
+            }
+        }
     }
     zr.clear();
+    zr_toggle = false;
     for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]) {
-        if (!bind.empty())
-            zr.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+        if (!bind.empty()) {
+            auto dev = Input::CreateDevice<Input::ButtonDevice>(bind);
+            if (dev) {
+                Common::ParamPackage pkg(bind);
+                if (pkg.Get("toggle", "0") == "1")
+                    zr_toggle = true;
+                else if (pkg.Get("turbo", "0") == "1")
+                    dev = std::make_unique<InputCommon::TurboButton>(std::move(dev));
+                zr.push_back(std::move(dev));
+            }
+        }
     }
     c_stick = Input::CreateDevice<Input::AnalogDevice>(
         Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CStick]);

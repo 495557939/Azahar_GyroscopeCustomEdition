@@ -1010,6 +1010,7 @@ void QtConfig::ReadUIValues() {
         ReadBasicSetting(UISettings::values.pause_when_in_background);
         ReadBasicSetting(UISettings::values.mute_when_in_background);
         ReadBasicSetting(UISettings::values.hide_mouse);
+        ReadBasicSetting(UISettings::values.auto_fullscreen_on_game_start);
     }
 
     qt_config->endGroup();
@@ -1610,6 +1611,7 @@ void QtConfig::SaveUIValues() {
         WriteBasicSetting(UISettings::values.pause_when_in_background);
         WriteBasicSetting(UISettings::values.mute_when_in_background);
         WriteBasicSetting(UISettings::values.hide_mouse);
+        WriteBasicSetting(UISettings::values.auto_fullscreen_on_game_start);
     }
 
     qt_config->endGroup();

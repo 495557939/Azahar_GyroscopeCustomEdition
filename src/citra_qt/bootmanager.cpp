@@ -750,7 +750,7 @@ void GRenderWindow::PollControllerLink() {
 
     constexpr float DEADZONE = 0.15f;
     constexpr float STICK_BASE = 8.0f;
-    constexpr float BUTTON_BASE = 4.0f;
+    constexpr float BUTTON_BASE = 8.0f;
 
     // Pre-open SDL controller for button/axis checks
     SDL_GameController* ctrl = nullptr;
@@ -850,10 +850,11 @@ void GRenderWindow::PollControllerLink() {
         Common::ParamPackage ap(analog_param);
         auto BestForDir = [&](const std::string& base) -> float {
             float best = 0.0f;
+            // Check legacy single binding (key "up", "down", ...) and slot-0 binding
             float s = CheckBinding(ap.Get(base, ""));
             if (s > best) best = s;
-            // Multi-binding: check _1, _2, ... up to _count or a reasonable limit
-            for (int i = 1; i <= 4; ++i) {
+            // Multi-binding: check _0, _1, _2 ... up to _count or a reasonable limit
+            for (int i = 0; i <= 4; ++i) {
                 s = CheckBinding(ap.Get(base + "_" + std::to_string(i), ""));
                 if (s > best) best = s;
             }

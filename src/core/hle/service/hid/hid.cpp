@@ -116,11 +116,16 @@ DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y) {
 
 void Module::LoadInputDevices() {
     LOG_DEBUG(Frontend, "Loading input devices");
-    std::transform(Settings::values.current_input_profile.buttons.begin() +
-                       Settings::NativeButton::BUTTON_HID_BEGIN,
-                   Settings::values.current_input_profile.buttons.begin() +
-                       Settings::NativeButton::BUTTON_HID_END,
-                   buttons.begin(), Input::CreateDevice<Input::ButtonDevice>);
+    // Multi-key mapping: create devices for all bindings per button
+    for (int i = 0; i < Settings::NativeButton::NUM_BUTTONS_HID; ++i) {
+        buttons[i].clear();
+        for (const auto& bind : Settings::values.current_input_profile.buttons[
+                 i + Settings::NativeButton::BUTTON_HID_BEGIN]) {
+            if (!bind.empty()) {
+                buttons[i].push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+            }
+        }
+    }
     circle_pad = Input::CreateDevice<Input::AnalogDevice>(
         Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CirclePad]);
     motion_device = Input::CreateDevice<Input::MotionDevice>(
@@ -134,7 +139,8 @@ void Module::LoadInputDevices() {
     } else {
         controller_touch_device.reset();
     }
-    if (Settings::values.current_input_profile.use_touch_from_button) {
+    if (Settings::values.current_input_profile.use_touch_from_button ||
+        !Settings::values.current_input_profile.touch_points.empty()) {
         touch_btn_device = Input::CreateDevice<Input::TouchDevice>("engine:touch_from_button");
     } else {
         touch_btn_device.reset();
@@ -202,20 +208,27 @@ void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
 
         system.Movie().HandleTouchStatus(touch_entry);
     } else {
-        state.a.Assign(buttons[A - BUTTON_HID_BEGIN]->GetStatus());
-        state.b.Assign(buttons[B - BUTTON_HID_BEGIN]->GetStatus());
-        state.x.Assign(buttons[X - BUTTON_HID_BEGIN]->GetStatus());
-        state.y.Assign(buttons[Y - BUTTON_HID_BEGIN]->GetStatus());
-        state.right.Assign(buttons[Right - BUTTON_HID_BEGIN]->GetStatus());
-        state.left.Assign(buttons[Left - BUTTON_HID_BEGIN]->GetStatus());
-        state.up.Assign(buttons[Up - BUTTON_HID_BEGIN]->GetStatus());
-        state.down.Assign(buttons[Down - BUTTON_HID_BEGIN]->GetStatus());
-        state.l.Assign(buttons[L - BUTTON_HID_BEGIN]->GetStatus());
-        state.r.Assign(buttons[R - BUTTON_HID_BEGIN]->GetStatus());
-        state.start.Assign(buttons[Start - BUTTON_HID_BEGIN]->GetStatus());
-        state.select.Assign(buttons[Select - BUTTON_HID_BEGIN]->GetStatus());
-        state.debug.Assign(buttons[Debug - BUTTON_HID_BEGIN]->GetStatus());
-        state.gpio14.Assign(buttons[Gpio14 - BUTTON_HID_BEGIN]->GetStatus());
+        // Multi-key mapping: OR all bindings per button
+        auto getButtonState = [this](int idx) -> bool {
+            for (const auto& dev : buttons[idx]) {
+                if (dev->GetStatus()) return true;
+            }
+            return false;
+        };
+        state.a.Assign(getButtonState(A - BUTTON_HID_BEGIN));
+        state.b.Assign(getButtonState(B - BUTTON_HID_BEGIN));
+        state.x.Assign(getButtonState(X - BUTTON_HID_BEGIN));
+        state.y.Assign(getButtonState(Y - BUTTON_HID_BEGIN));
+        state.right.Assign(getButtonState(Right - BUTTON_HID_BEGIN));
+        state.left.Assign(getButtonState(Left - BUTTON_HID_BEGIN));
+        state.up.Assign(getButtonState(Up - BUTTON_HID_BEGIN));
+        state.down.Assign(getButtonState(Down - BUTTON_HID_BEGIN));
+        state.l.Assign(getButtonState(L - BUTTON_HID_BEGIN));
+        state.r.Assign(getButtonState(R - BUTTON_HID_BEGIN));
+        state.start.Assign(getButtonState(Start - BUTTON_HID_BEGIN));
+        state.select.Assign(getButtonState(Select - BUTTON_HID_BEGIN));
+        state.debug.Assign(getButtonState(Debug - BUTTON_HID_BEGIN));
+        state.gpio14.Assign(getButtonState(Gpio14 - BUTTON_HID_BEGIN));
 
         // Get current circle pad position and update circle pad direction
         float circle_pad_x_f, circle_pad_y_f;

@@ -6,6 +6,7 @@
 
 #include <atomic>
 #include <memory>
+#include <vector>
 #include "common/bit_field.h"
 #include "common/common_types.h"
 #include "common/swap.h"
@@ -89,8 +90,8 @@ private:
     std::shared_ptr<Kernel::SharedMemory> shared_memory;
     u32 next_pad_index{0};
     Core::TimingEventType* update_callback_id;
-    std::unique_ptr<Input::ButtonDevice> zl_button;
-    std::unique_ptr<Input::ButtonDevice> zr_button;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> zl_button;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> zr_button;
     std::unique_ptr<Input::AnalogDevice> c_stick;
     std::atomic<bool> is_device_reload_pending{false};
     bool raw_c_stick{false};

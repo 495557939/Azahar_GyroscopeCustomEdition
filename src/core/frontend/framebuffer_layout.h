@@ -42,6 +42,55 @@ struct FramebufferLayout {
     Common::Rectangle<u32> additional_screen;
     CardboardSettings cardboard;
 
+    // DiySC: Per-screen clip percentages (0.0-1.0, each edge independently)
+    float top_clip_left = 0.0f;
+    float top_clip_right = 0.0f;
+    float top_clip_top = 0.0f;
+    float top_clip_bottom = 0.0f;
+    float bot_clip_left = 0.0f;
+    float bot_clip_right = 0.0f;
+    float bot_clip_top = 0.0f;
+    float bot_clip_bottom = 0.0f;
+
+    // DiySC: Corner radius in pixels (0 = no rounding)
+    float top_radius = 0.0f;
+    float bot_radius = 0.0f;
+    // DiySC: Edge blur radius in pixels (0 = no blur, inward-only)
+    float top_edge_blur = 0.0f;
+    float bot_edge_blur = 0.0f;
+
+    // DiySC: Position offsets for off-screen movement (negative = off left/top)
+    float top_offset_x = 0.0f;
+    float top_offset_y = 0.0f;
+    float bot_offset_x = 0.0f;
+    float bot_offset_y = 0.0f;
+
+    // DiySC: Background blur fill
+    bool bg_blur_enabled = false;
+    bool bg_blur_is_bottom = false;
+    float bg_blur_darken = 0.5f;
+    float bg_blur_sigma = 8.0f;
+    float bg_blur_scale = 3.0f;
+    u32 bg_blur_max_radius = 64;
+    // DiySC: Global background vignette
+    bool bg_vignette_enabled = false;
+    std::array<float, 3> bg_vignette_color = {0, 0, 0};
+    float bg_vignette_size = 0.5f;
+    // DiySC: Global background overlay
+    bool bg_overlay_enabled = false;
+    std::array<float, 3> bg_overlay_color = {0.5f, 0.5f, 0.5f};
+    // DiySC: Per-screen vignette & overlay
+    bool top_vignette_enabled = false;
+    std::array<float, 3> top_vignette_color = {0, 0, 0};
+    float top_vignette_size = 0.5f;
+    bool bot_vignette_enabled = false;
+    std::array<float, 3> bot_vignette_color = {0, 0, 0};
+    float bot_vignette_size = 0.5f;
+    bool top_overlay_enabled = false;
+    std::array<float, 3> top_overlay_color = {0.5f, 0.5f, 0.5f};
+    bool bot_overlay_enabled = false;
+    std::array<float, 3> bot_overlay_color = {0.5f, 0.5f, 0.5f};
+
     /**
      * Returns the ratio of pixel size of the top screen, compared to the native size of the 3DS
      * screen.
@@ -154,6 +203,16 @@ FramebufferLayout AndroidSecondaryLayout(u32 width, u32 height);
  */
 FramebufferLayout CustomFrameLayout(u32 width, u32 height, bool is_swapped,
                                     bool is_portrait_mode = false);
+
+/**
+ * DiySC: Percentage-based custom layout with internal aspect ratio support.
+ * All positions/sizes are percentages of the window/internal-canvas (0-10000 = 0.00%-100.00%).
+ * @param width Window framebuffer width in pixels
+ * @param height Window framebuffer height in pixels
+ * @param is_swapped if true, screens are swapped
+ * @return Newly created FramebufferLayout object
+ */
+FramebufferLayout CustomPercentFrameLayout(u32 width, u32 height, bool is_swapped);
 
 /**
  * Convenience method to get frame layout by resolution scale

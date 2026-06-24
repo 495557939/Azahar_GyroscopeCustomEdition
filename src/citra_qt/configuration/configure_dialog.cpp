@@ -115,6 +115,10 @@ void ConfigureDialog::ApplyConfiguration() {
     storage_tab->ApplyConfiguration();
     system.ApplySettings();
     Settings::LogSettings();
+
+    if (save_callback) {
+        save_callback();
+    }
 }
 
 Q_DECLARE_METATYPE(QList<QWidget*>);

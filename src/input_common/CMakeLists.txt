@@ -7,6 +7,8 @@ add_library(input_common STATIC EXCLUDE_FROM_ALL
     main.h
     motion_emu.cpp
     motion_emu.h
+    mouse/mouse.cpp
+    mouse/mouse.h
     precompiled_headers.h
     touch_from_button.cpp
     touch_from_button.h

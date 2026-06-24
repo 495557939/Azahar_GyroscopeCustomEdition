@@ -3,8 +3,13 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <functional>
+#include <unordered_map>
 #include <memory>
 #include <utility>
+#include <QGridLayout>
+#include <QHBoxLayout>
+#include <QVBoxLayout>
 #include <QInputDialog>
 #include <QKeyEvent>
 #include <QLabel>
@@ -12,6 +17,7 @@
 #include <QMessageBox>
 #include <QSlider>
 #include <QTimer>
+#include <SDL.h>
 #include "citra_qt/configuration/config.h"
 #include "citra_qt/configuration/configure_input.h"
 #include "citra_qt/configuration/configure_motion_touch.h"
@@ -69,13 +75,133 @@ static void SetAnalogButton(const Common::ParamPackage& input_param,
     analog_param.Set(button_name, input_param.Serialize());
 }
 
+// ── Analog multi-key helpers ──────────────────────────────────────────────
+
+static void EnsureAnalogFromButton(Common::ParamPackage& p) {
+    // Only set the engine field; do NOT clobber existing bindings on other
+    // directions (up/down/left/right and the diagonals up_left/up_right/
+    // down_left/down_right) which would otherwise all disappear.
+    if (p.Get("engine", "") != "analog_from_button")
+        p.Set("engine", "analog_from_button");
+}
+
+/// Total number of bindings stored for a direction (0 if none).
+static int AnalogButtonCount(const Common::ParamPackage& p, const std::string& dir) {
+    int cnt = p.Get(dir + "_count", -1);
+    if (cnt >= 0)
+        return cnt;
+    // Legacy: single binding stored directly under "dir"
+    return p.Has(dir) ? 1 : 0;
+}
+
+/// Get the Nth binding as a ParamPackage (empty if out of range).
+static Common::ParamPackage AnalogButtonN(const Common::ParamPackage& p,
+                                           const std::string& dir, int n) {
+    if (p.Has(dir + "_" + std::to_string(n)))
+        return Common::ParamPackage{p.Get(dir + "_" + std::to_string(n), "")};
+    // Legacy fallback for n==0
+    if (n == 0 && p.Has(dir))
+        return Common::ParamPackage{p.Get(dir, "")};
+    return {};
+}
+
+/// Set (replace) the Nth binding and update count if needed.
+static void SetAnalogButtonN(Common::ParamPackage& p, const std::string& dir, int n,
+                             const Common::ParamPackage& input) {
+    EnsureAnalogFromButton(p);
+    int old_cnt = AnalogButtonCount(p, dir);
+    p.Set(dir + "_" + std::to_string(n), input.Serialize());
+    if (n + 1 > old_cnt) {
+        // Migrate legacy single key to multi-key format
+        if (old_cnt == 1 && n >= 1 && p.Has(dir)) {
+            p.Set(dir + "_0", p.Get(dir, ""));
+            p.Erase(dir);
+        }
+        p.Set(dir + "_count", n + 1);
+    }
+}
+
+/// Erase the Nth binding and compact remaining bindings.
+static void EraseAnalogButtonN(Common::ParamPackage& p, const std::string& dir, int n) {
+    int cnt = AnalogButtonCount(p, dir);
+    if (n >= cnt)
+        return;
+    for (int i = n; i < cnt - 1; i++)
+        p.Set(dir + "_" + std::to_string(i),
+              p.Get(dir + "_" + std::to_string(i + 1), ""));
+    p.Erase(dir + "_" + std::to_string(cnt - 1));
+    if (cnt - 1 == 0) {
+        p.Erase(dir + "_count");
+        p.Erase(dir); // also erase legacy key
+    } else {
+        p.Set(dir + "_count", cnt - 1);
+    }
+}
+
+/// Clear all bindings for a direction.
+static void ClearAnalogButtons(Common::ParamPackage& p, const std::string& dir) {
+    int cnt = AnalogButtonCount(p, dir);
+    for (int i = 0; i < cnt; i++)
+        p.Erase(dir + "_" + std::to_string(i));
+    p.Erase(dir + "_count");
+    p.Erase(dir);
+}
+
+/// Build a clear, cross-controller display name for an SDL_GameControllerButton enum.
+/// Distinguishes controller buttons from keyboard keys — e.g. "Button_A" vs just "A".
+static QString GcButtonToDisplayName(int gc_button) {
+    if (gc_button < 0 || gc_button >= SDL_CONTROLLER_BUTTON_MAX)
+        return QObject::tr("GC %1").arg(gc_button);
+
+    // Common buttons — readable labels that won't be confused with keyboard keys
+    static const std::unordered_map<int, const char*> names{
+        {SDL_CONTROLLER_BUTTON_A, "Button_A"},
+        {SDL_CONTROLLER_BUTTON_B, "Button_B"},
+        {SDL_CONTROLLER_BUTTON_X, "Button_X"},
+        {SDL_CONTROLLER_BUTTON_Y, "Button_Y"},
+        {SDL_CONTROLLER_BUTTON_DPAD_UP, "DPad_Up"},
+        {SDL_CONTROLLER_BUTTON_DPAD_DOWN, "DPad_Down"},
+        {SDL_CONTROLLER_BUTTON_DPAD_LEFT, "DPad_Left"},
+        {SDL_CONTROLLER_BUTTON_DPAD_RIGHT, "DPad_Right"},
+        {SDL_CONTROLLER_BUTTON_LEFTSHOULDER, "L_Bumper"},
+        {SDL_CONTROLLER_BUTTON_RIGHTSHOULDER, "R_Bumper"},
+        {SDL_CONTROLLER_BUTTON_BACK, "Select"},
+        {SDL_CONTROLLER_BUTTON_START, "Start"},
+        {SDL_CONTROLLER_BUTTON_LEFTSTICK, "L3"},
+        {SDL_CONTROLLER_BUTTON_RIGHTSTICK, "R3"},
+        {SDL_CONTROLLER_BUTTON_GUIDE, "Guide"},
+        {SDL_CONTROLLER_BUTTON_MISC1, "Misc1"},
+        {SDL_CONTROLLER_BUTTON_PADDLE1, "Paddle1"},
+        {SDL_CONTROLLER_BUTTON_PADDLE2, "Paddle2"},
+        {SDL_CONTROLLER_BUTTON_PADDLE3, "Paddle3"},
+        {SDL_CONTROLLER_BUTTON_PADDLE4, "Paddle4"},
+        {SDL_CONTROLLER_BUTTON_TOUCHPAD, "Touchpad"},
+    };
+    if (auto it = names.find(gc_button); it != names.end())
+        return QString::fromUtf8(it->second);
+
+    // Fallback: use SDL's own name
+    if (const char* sdl_name = SDL_GameControllerGetStringForButton(
+            static_cast<SDL_GameControllerButton>(gc_button));
+        sdl_name && sdl_name[0])
+        return QString::fromUtf8(sdl_name);
+
+    return QObject::tr("GC %1").arg(gc_button);
+}
+
 static QString ButtonToText(const Common::ParamPackage& param) {
     if (!param.Has("engine")) {
         return QObject::tr("[not set]");
     }
     const auto engine_str = param.Get("engine", "");
-    if (engine_str == "keyboard") {
-        return GetKeyName(param.Get("code", 0));
+    // NOTE: "keyboard" engine string may occasionally have len 9 instead of 8
+    // due to a toolchain-specific deserialization quirk.  Detect keyboard
+    // engine via ownership of a "code" key (all keyboard bindings have one)
+    // as the primary signal.
+    if (engine_str == "keyboard" || param.Has("code")) {
+        int code = param.Get("code", 0);
+        QString name = GetKeyName(code);
+        return name;
     }
 
     if (engine_str == "sdl") {
@@ -99,6 +225,34 @@ static QString ButtonToText(const Common::ParamPackage& param) {
             return QObject::tr("Button %1").arg(button_str);
         }
 
+        // Adaptive controller mapping: gc_button is an SDL_GameControllerButton enum
+        // that maps to a cross-controller-compatible virtual button name (e.g. "Button_A").
+        if (param.Has("gc_button")) {
+            return GcButtonToDisplayName(param.Get("gc_button", 0));
+        }
+
+        // Adaptive controller mapping: gc_axis maps analog stick axes and triggers
+        // to cross-controller-compatible names with direction distinction.
+        if (param.Has("gc_axis")) {
+            int gc_axis = param.Get("gc_axis", 0);
+            const bool is_positive = (param.Get("direction", "+") == "+");
+            switch (gc_axis) {
+            case SDL_CONTROLLER_AXIS_LEFTX:   // 0
+                return is_positive ? QStringLiteral("L_Stick_Right") : QStringLiteral("L_Stick_Left");
+            case SDL_CONTROLLER_AXIS_LEFTY:   // 1
+                return is_positive ? QStringLiteral("L_Stick_Down") : QStringLiteral("L_Stick_Up");
+            case SDL_CONTROLLER_AXIS_RIGHTX:  // 2
+                return is_positive ? QStringLiteral("R_Stick_Right") : QStringLiteral("R_Stick_Left");
+            case SDL_CONTROLLER_AXIS_RIGHTY:  // 3
+                return is_positive ? QStringLiteral("R_Stick_Down") : QStringLiteral("R_Stick_Up");
+            case SDL_CONTROLLER_AXIS_TRIGGERLEFT:  // 4
+                return QStringLiteral("L_Trigger");
+            case SDL_CONTROLLER_AXIS_TRIGGERRIGHT: // 5
+                return QStringLiteral("R_Trigger");
+            }
+            return QObject::tr("GC Axis %1").arg(gc_axis);
+        }
+
         return {};
     }
 
@@ -116,6 +270,28 @@ static QString ButtonToText(const Common::ParamPackage& param) {
         return GetKeyName(param.Get("code", 0));
     }
 
+    if (engine_str == "mouse") {
+        if (param.Has("button")) {
+            const QString button_str = QString::fromStdString(param.Get("button", ""));
+            if (button_str == QLatin1String("left"))
+                return QObject::tr("Mouse: Left");
+            if (button_str == QLatin1String("right"))
+                return QObject::tr("Mouse: Right");
+            if (button_str == QLatin1String("middle"))
+                return QObject::tr("Mouse: Middle");
+            return QObject::tr("Mouse %1").arg(button_str);
+        }
+        if (param.Has("axis") && param.Get("axis", "") == "wheel") {
+            const QString value_str = QString::fromStdString(param.Get("value", ""));
+            if (value_str == QLatin1String("up"))
+                return QObject::tr("Mouse: Wheel Up");
+            if (value_str == QLatin1String("down"))
+                return QObject::tr("Mouse: Wheel Down");
+            return QObject::tr("Mouse Wheel");
+        }
+        return QObject::tr("Mouse");
+    }
+
     return QObject::tr("[unknown]");
 }
 
@@ -126,6 +302,10 @@ static QString AnalogToText(const Common::ParamPackage& param, const std::string
 
     const auto engine_str = param.Get("engine", "");
     if (engine_str == "analog_from_button") {
+        // Support multi-key: show first binding
+        int cnt = AnalogButtonCount(param, dir);
+        if (cnt > 0)
+            return ButtonToText(AnalogButtonN(param, dir, 0));
         return ButtonToText(Common::ParamPackage{param.Get(dir, "")});
     }
 
@@ -136,6 +316,17 @@ static QString AnalogToText(const Common::ParamPackage& param, const std::string
     if (engine_str == "sdl" || engine_str == "gcpad") {
         if (dir == "modifier") {
             return QObject::tr("[unused]");
+        }
+        // Adaptive analog: show virtual stick name from gc_axis pair
+        if (param.Has("gc_axis_x") && param.Has("gc_axis_y")) {
+            int gx = param.Get("gc_axis_x", 0);
+            // LEFTX=0 (CirclePad), RIGHTX=2 (CStick)
+            const char* stick = (gx == 2) ? "R_Stick" : "L_Stick";
+            if (dir == "left")  return QObject::tr("%1_Left").arg(stick);
+            if (dir == "right") return QObject::tr("%1_Right").arg(stick);
+            if (dir == "up")    return QObject::tr("%1_Up").arg(stick);
+            if (dir == "down")  return QObject::tr("%1_Down").arg(stick);
+            return {};
         }
         if (dir == "left") {
             return QObject::tr("Axis %1%2").arg(axis_x_str, minus_str);
@@ -166,38 +357,35 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
 
     ui->profile->setCurrentIndex(Settings::values.current_input_profile_index);
 
-    button_map = {
+    // Store primary .ui buttons (first binding slot per button)
+    std::array<QPushButton*, Settings::NativeButton::NumButtons> _primary_buttons = {
         ui->buttonA,      ui->buttonB,        ui->buttonX,        ui->buttonY,
         ui->buttonDpadUp, ui->buttonDpadDown, ui->buttonDpadLeft, ui->buttonDpadRight,
         ui->buttonL,      ui->buttonR,        ui->buttonStart,    ui->buttonSelect,
         ui->buttonDebug,  ui->buttonGpio14,   ui->buttonZL,       ui->buttonZR,
         ui->buttonHome,   ui->buttonPower,
     };
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++) {
+        if (_primary_buttons[i]) {
+            button_map[i].push_back(_primary_buttons[i]);
+        }
+    }
 
-    analog_map_buttons = {{
-        {
-            ui->buttonCircleUp,
-            ui->buttonCircleDown,
-            ui->buttonCircleLeft,
-            ui->buttonCircleRight,
-            ui->buttonCircleUpLeft,
-            ui->buttonCircleUpRight,
-            ui->buttonCircleDownLeft,
-            ui->buttonCircleDownRight,
-            nullptr,
-        },
-        {
-            ui->buttonCStickUp,
-            ui->buttonCStickDown,
-            ui->buttonCStickLeft,
-            ui->buttonCStickRight,
-            ui->buttonCStickUpLeft,
-            ui->buttonCStickUpRight,
-            ui->buttonCStickDownLeft,
-            ui->buttonCStickDownRight,
-            nullptr,
-        },
-    }};
+    // Initialize analog direction button vectors with primary .ui buttons
+    {
+        std::array<QPushButton*, ANALOG_SUB_BUTTONS_NUM> circle_primary = {
+            ui->buttonCircleUp,    ui->buttonCircleDown,   ui->buttonCircleLeft,
+            ui->buttonCircleRight, ui->buttonCircleUpLeft, ui->buttonCircleUpRight,
+            ui->buttonCircleDownLeft, ui->buttonCircleDownRight, nullptr};
+        std::array<QPushButton*, ANALOG_SUB_BUTTONS_NUM> cstick_primary = {
+            ui->buttonCStickUp,    ui->buttonCStickDown,   ui->buttonCStickLeft,
+            ui->buttonCStickRight, ui->buttonCStickUpLeft, ui->buttonCStickUpRight,
+            ui->buttonCStickDownLeft, ui->buttonCStickDownRight, nullptr};
+        for (int i = 0; i < ANALOG_SUB_BUTTONS_NUM; i++) {
+            if (circle_primary[i]) analog_map_buttons[0][i].push_back(circle_primary[i]);
+            if (cstick_primary[i]) analog_map_buttons[1][i].push_back(cstick_primary[i]);
+        }
+    }
 
     analog_map_stick = {ui->buttonCircleAnalog, ui->buttonCStickAnalog};
     analog_map_deadzone_and_modifier_slider = {ui->sliderCirclePadDeadzoneAndModifier,
@@ -206,96 +394,218 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                                                      ui->labelCStickDeadzoneAndModifier};
 
     for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
-        if (!button_map[button_id])
+        if (button_map[button_id].empty())
             continue;
-        button_map[button_id]->setContextMenuPolicy(Qt::CustomContextMenu);
-        connect(button_map[button_id], &QPushButton::clicked, [this, button_id]() {
-            HandleClick(
-                button_map[button_id],
-                [this, button_id](Common::ParamPackage params) {
-                    // Workaround for ZL & ZR for analog triggers like on XBOX controllors.
-                    // Analog triggers (from controllers like the XBOX controller) would not
-                    // work due to a different range of their signals (from 0 to 255 on
-                    // analog triggers instead of -32768 to 32768 on analog joysticks). The
-                    // SDL driver misinterprets analog triggers as analog joysticks.
-                    // TODO: reinterpret the signal range for analog triggers to map the
-                    // values correctly. This is required for the correct emulation of the
-                    // analog triggers of the GameCube controller.
-                    if (button_id == Settings::NativeButton::ZL ||
-                        button_id == Settings::NativeButton::ZR) {
-                        params.Set("direction", "+");
-                        params.Set("threshold", "0.5");
-                    }
-                    buttons_param[button_id] = std::move(params);
-                    // If the user closes the dialog, the changes are reverted in
-                    // `GMainWindow::OnConfigure()`
-                    ApplyConfiguration();
-                    Settings::SaveProfile(ui->profile->currentIndex());
-                },
-                InputCommon::Polling::DeviceType::Button);
-        });
-        connect(button_map[button_id], &QPushButton::customContextMenuRequested, this,
-                [this, button_id](const QPoint& menu_location) {
-                    QMenu context_menu;
-                    context_menu.addAction(tr("Clear"), this, [&] {
-                        buttons_param[button_id].Clear();
-                        button_map[button_id]->setText(tr("[not set]"));
+        SetupMultiKeySlots(button_id);
+
+        // Connect click handlers for all binding slots
+        for (int slot = 0; slot < (int)button_map[button_id].size(); slot++) {
+            QPushButton* btn = button_map[button_id][slot];
+            btn->setContextMenuPolicy(Qt::CustomContextMenu);
+            connect(btn, &QPushButton::clicked, [this, button_id, slot, btn]() {
+                HandleClick(
+                    btn,
+                    [this, button_id, slot](Common::ParamPackage params) {
+                        // Workaround for ZL & ZR for analog triggers like on XBOX controllors.
+                        if (button_id == Settings::NativeButton::ZL ||
+                            button_id == Settings::NativeButton::ZR) {
+                            params.Set("direction", "+");
+                            params.Set("threshold", "0.5");
+                        }
+                        // Ensure buttons_param has enough slots
+                        while ((int)buttons_param[button_id].size() <= slot)
+                            buttons_param[button_id].resize(slot + 1);
+                        buttons_param[button_id][slot] = std::move(params);
+                        // Trim trailing empty params
+                        while (!buttons_param[button_id].empty() &&
+                               buttons_param[button_id].back().Serialize().empty())
+                            buttons_param[button_id].pop_back();
+                        UpdateMultiKeySlots(button_id);
                         ApplyConfiguration();
                         Settings::SaveProfile(ui->profile->currentIndex());
+                    },
+                    InputCommon::Polling::DeviceType::Button);
+            });
+            connect(btn, &QPushButton::customContextMenuRequested, this,
+                    [this, button_id, slot](const QPoint& menu_location) {
+                        QMenu context_menu;
+                        // Clear this specific binding
+                        if ((int)buttons_param[button_id].size() > slot &&
+                            !buttons_param[button_id][slot].Serialize().empty()) {
+                            context_menu.addAction(tr("Clear"), this, [=] {
+                                if ((int)buttons_param[button_id].size() > slot)
+                                    buttons_param[button_id].erase(
+                                        buttons_param[button_id].begin() + slot);
+                                UpdateMultiKeySlots(button_id);
+                                ApplyConfiguration();
+                                Settings::SaveProfile(ui->profile->currentIndex());
+                            });
+                        }
+                        context_menu.addAction(tr("Clear All"), this, [=] {
+                            buttons_param[button_id].clear();
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Restore Default"), this, [=] {
+                            buttons_param[button_id].clear();
+                            buttons_param[button_id].clear();
+                            for (const auto& b : QtConfig::default_buttons[button_id])
+                                buttons_param[button_id].push_back(Common::ParamPackage{b});
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addSeparator();
+                        // Mouse button bindings
+                        context_menu.addAction(tr("Mouse: Left Button"), this, [=] {
+                            if ((int)buttons_param[button_id].size() <= slot)
+                                buttons_param[button_id].resize(slot + 1);
+                            buttons_param[button_id][slot] =
+                                Common::ParamPackage{"engine:mouse,button:left"};
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Mouse: Right Button"), this, [=] {
+                            if ((int)buttons_param[button_id].size() <= slot)
+                                buttons_param[button_id].resize(slot + 1);
+                            buttons_param[button_id][slot] =
+                                Common::ParamPackage{"engine:mouse,button:right"};
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Mouse: Middle Button"), this, [=] {
+                            if ((int)buttons_param[button_id].size() <= slot)
+                                buttons_param[button_id].resize(slot + 1);
+                            buttons_param[button_id][slot] =
+                                Common::ParamPackage{"engine:mouse,button:middle"};
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Mouse: Wheel Up"), this, [=] {
+                            if ((int)buttons_param[button_id].size() <= slot)
+                                buttons_param[button_id].resize(slot + 1);
+                            buttons_param[button_id][slot] =
+                                Common::ParamPackage{"engine:mouse,axis:wheel,value:up"};
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Mouse: Wheel Down"), this, [=] {
+                            if ((int)buttons_param[button_id].size() <= slot)
+                                buttons_param[button_id].resize(slot + 1);
+                            buttons_param[button_id][slot] =
+                                Common::ParamPackage{"engine:mouse,axis:wheel,value:down"};
+                            UpdateMultiKeySlots(button_id);
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.exec(
+                            button_map[button_id][slot]->mapToGlobal(menu_location));
                     });
-                    context_menu.addAction(tr("Restore Default"), this, [&] {
-                        buttons_param[button_id] =
-                            Common::ParamPackage{InputCommon::GenerateKeyboardParam(
-                                QtConfig::default_buttons[button_id])};
-                        button_map[button_id]->setText(ButtonToText(buttons_param[button_id]));
-                        ApplyConfiguration();
-                        Settings::SaveProfile(ui->profile->currentIndex());
-                    });
-                    context_menu.exec(button_map[button_id]->mapToGlobal(menu_location));
-                });
+        }
     }
 
     for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
         for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM; sub_button_id++) {
-            if (!analog_map_buttons[analog_id][sub_button_id])
+            if (analog_map_buttons[analog_id][sub_button_id].empty() ||
+                !analog_map_buttons[analog_id][sub_button_id][0])
                 continue;
-            analog_map_buttons[analog_id][sub_button_id]->setContextMenuPolicy(
-                Qt::CustomContextMenu);
-            connect(analog_map_buttons[analog_id][sub_button_id], &QPushButton::clicked, this,
-                    [this, analog_id, sub_button_id]() {
-                        HandleClick(
-                            analog_map_buttons[analog_id][sub_button_id],
-                            [this, analog_id, sub_button_id](const Common::ParamPackage& params) {
-                                SetAnalogButton(params, analogs_param[analog_id],
-                                                analog_sub_buttons[sub_button_id]);
+
+            SetupAnalogMultiKeySlots(analog_id, sub_button_id);
+
+            // Connect click and context menu for every binding slot (primary + extras)
+            for (int slot = 0; slot < MAX_BINDINGS_PER_BUTTON; slot++) {
+                QPushButton* btn = analog_map_buttons[analog_id][sub_button_id][slot];
+                btn->setContextMenuPolicy(Qt::CustomContextMenu);
+
+                connect(btn, &QPushButton::clicked, this,
+                        [this, analog_id, sub_button_id, slot]() {
+                            HandleClick(
+                                analog_map_buttons[analog_id][sub_button_id][slot],
+                                [this, analog_id, sub_button_id, slot](
+                                    const Common::ParamPackage& params) {
+                                    SetAnalogButtonN(analogs_param[analog_id],
+                                                     analog_sub_buttons[sub_button_id], slot,
+                                                     params);
+                                    UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                },
+                                InputCommon::Polling::DeviceType::Button);
+                        });
+
+                connect(btn, &QPushButton::customContextMenuRequested, this,
+                        [this, analog_id, sub_button_id, slot](const QPoint& menu_location) {
+                            QMenu context_menu;
+                            const auto& dir = analog_sub_buttons[sub_button_id];
+                            int cnt = AnalogButtonCount(analogs_param[analog_id], dir);
+                            // Clear this specific binding
+                            if (cnt > 0 && slot < cnt) {
+                                auto binding = AnalogButtonN(analogs_param[analog_id], dir, slot);
+                                if (!binding.Serialize().empty()) {
+                                    context_menu.addAction(tr("Clear"), this, [=] {
+                                EraseAnalogButtonN(analogs_param[analog_id], dir, slot);
+                                UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
                                 ApplyConfiguration();
                                 Settings::SaveProfile(ui->profile->currentIndex());
-                            },
-                            InputCommon::Polling::DeviceType::Button);
-                    });
-            connect(analog_map_buttons[analog_id][sub_button_id],
-                    &QPushButton::customContextMenuRequested, this,
-                    [this, analog_id, sub_button_id](const QPoint& menu_location) {
-                        QMenu context_menu;
-                        context_menu.addAction(tr("Clear"), this, [&] {
-                            analogs_param[analog_id].Erase(analog_sub_buttons[sub_button_id]);
-                            analog_map_buttons[analog_id][sub_button_id]->setText(tr("[not set]"));
-                            ApplyConfiguration();
-                            Settings::SaveProfile(ui->profile->currentIndex());
+                            });
+                                }
+                            }
+                            // Clear all bindings for this direction
+                            if (cnt > 0) {
+                                context_menu.addAction(tr("Clear All"), this, [=] {
+                                    ClearAnalogButtons(analogs_param[analog_id], dir);
+                                    UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                    // Force repaint
+                                    auto* btn = analog_map_buttons[analog_id][sub_button_id][0];
+                                    if (btn) btn->update();
+                                });
+                            }
+                            context_menu.addAction(tr("Restore Default"), this, [=] {
+                                ClearAnalogButtons(analogs_param[analog_id], dir);
+                                Common::ParamPackage params{InputCommon::GenerateKeyboardParam(
+                                    QtConfig::default_analogs[analog_id][sub_button_id])};
+                                SetAnalogButtonN(analogs_param[analog_id], dir, 0, params);
+                                UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
+                                ApplyConfiguration();
+                                Settings::SaveProfile(ui->profile->currentIndex());
+                            });
+                            context_menu.addSeparator();
+                            // Mouse bindings
+                            auto addMouseAction = [&](const QString& label,
+                                                       const Common::ParamPackage& pkg) {
+                                context_menu.addAction(label, this, [=] {
+                                    int n = AnalogButtonCount(analogs_param[analog_id], dir);
+                                    SetAnalogButtonN(analogs_param[analog_id], dir,
+                                                     slot < n ? slot : n, pkg);
+                                    UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            };
+                            addMouseAction(tr("Mouse: Left Button"),
+                                           {{"engine", "mouse"}, {"button", "left"}});
+                            addMouseAction(tr("Mouse: Right Button"),
+                                           {{"engine", "mouse"}, {"button", "right"}});
+                            addMouseAction(tr("Mouse: Middle Button"),
+                                           {{"engine", "mouse"}, {"button", "middle"}});
+                            addMouseAction(
+                                tr("Mouse: Wheel Up"),
+                                {{"engine", "mouse"}, {"axis", "wheel"}, {"value", "up"}});
+                            addMouseAction(
+                                tr("Mouse: Wheel Down"),
+                                {{"engine", "mouse"}, {"axis", "wheel"}, {"value", "down"}});
+                            context_menu.exec(
+                                analog_map_buttons[analog_id][sub_button_id][slot]->mapToGlobal(
+                                    menu_location));
                         });
-                        context_menu.addAction(tr("Restore Default"), this, [&] {
-                            Common::ParamPackage params{InputCommon::GenerateKeyboardParam(
-                                QtConfig::default_analogs[analog_id][sub_button_id])};
-                            SetAnalogButton(params, analogs_param[analog_id],
-                                            analog_sub_buttons[sub_button_id]);
-                            analog_map_buttons[analog_id][sub_button_id]->setText(AnalogToText(
-                                analogs_param[analog_id], analog_sub_buttons[sub_button_id]));
-                            ApplyConfiguration();
-                            Settings::SaveProfile(ui->profile->currentIndex());
-                        });
-                        context_menu.exec(analog_map_buttons[analog_id][sub_button_id]->mapToGlobal(
-                            menu_location));
-                    });
+            }
         }
         connect(analog_map_stick[analog_id], &QPushButton::clicked, this, [this, analog_id]() {
             if (QMessageBox::information(
@@ -332,49 +642,225 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                 });
     }
 
-    // The Circle Mod button is common for both the sticks, so update the modifier settings
-    // for both the sticks.
-    connect(ui->buttonCircleMod, &QPushButton::clicked, this, [this]() {
+    // ----- CircleMod (轻推摇杆) multi-key setup -----
+    // CircleMod is an analog modifier that applies to both CirclePad and CStick.
+    // It is not part of NativeButton::Values, so we maintain a separate multi-key
+    // vector (circlemod_param) and sync it into analogs_param on apply.
+    ui->buttonCircleMod->setContextMenuPolicy(Qt::CustomContextMenu);
+    circlemod_button_map.push_back(ui->buttonCircleMod);
+    SetupCircleModMultiKeySlots();
+
+    // Helper: apply circlemod changes → analogs → save
+    auto applyCircleMod = [this]() {
+        UpdateCircleModMultiKeySlots();
+        // Update primary button text (slot 0 — not handled by UpdateCircleModMultiKeySlots)
+        if (circlemod_button_map[0]) {
+            circlemod_button_map[0]->setText(
+                circlemod_param.empty()
+                    ? tr("[not set]")
+                    : ButtonToText(circlemod_param[0]));
+        }
+        SyncCircleModToAnalogs();
+        ApplyConfiguration();
+        Settings::SaveProfile(ui->profile->currentIndex());
+    };
+    // Helper: build context menu for any CircleMod binding slot
+    auto buildCircleModMenu = [this, applyCircleMod](int slotCapture, const QPoint& menu_location,
+                                     QPushButton* sourceButton) {
+        QMenu context_menu;
+        if (slotCapture < (int)circlemod_param.size() &&
+            !circlemod_param[slotCapture].Serialize().empty()) {
+            context_menu.addAction(tr("Clear"), this, [this, slotCapture, applyCircleMod] {
+                if (slotCapture < (int)circlemod_param.size())
+                    circlemod_param.erase(circlemod_param.begin() + slotCapture);
+                applyCircleMod();
+            });
+        }
+        context_menu.addAction(tr("Clear All"), this, [this, applyCircleMod] {
+            circlemod_param.clear();
+            applyCircleMod();
+        });
+        context_menu.addAction(tr("Restore Default"), this, [this, applyCircleMod] {
+            circlemod_param.clear();
+            if (QtConfig::default_analogs[0][4] != 0)
+                circlemod_param.push_back(Common::ParamPackage{
+                    InputCommon::GenerateKeyboardParam(
+                        QtConfig::default_analogs[0][4])});
+            applyCircleMod();
+        });
+        context_menu.addSeparator();
+        // Mouse bindings
+        auto setMouseBinding = [this, slotCapture, applyCircleMod](const char* engine_str) {
+            while ((int)circlemod_param.size() <= slotCapture)
+                circlemod_param.resize(slotCapture + 1);
+            circlemod_param[slotCapture] = Common::ParamPackage{engine_str};
+            applyCircleMod();
+        };
+        context_menu.addAction(tr("Mouse: Left Button"), this,
+                               [setMouseBinding] { setMouseBinding("engine:mouse,button:left"); });
+        context_menu.addAction(tr("Mouse: Right Button"), this,
+                               [setMouseBinding] { setMouseBinding("engine:mouse,button:right"); });
+        context_menu.addAction(tr("Mouse: Middle Button"), this,
+                               [setMouseBinding] { setMouseBinding("engine:mouse,button:middle"); });
+        context_menu.addAction(tr("Mouse: Wheel Up"), this,
+                               [setMouseBinding] { setMouseBinding("engine:mouse,axis:wheel,value:up"); });
+        context_menu.addAction(tr("Mouse: Wheel Down"), this,
+                               [setMouseBinding] { setMouseBinding("engine:mouse,axis:wheel,value:down"); });
+        context_menu.exec(sourceButton->mapToGlobal(menu_location));
+    };
+
+    // Primary button (slot 0) click handler
+    connect(ui->buttonCircleMod, &QPushButton::clicked, this, [this, applyCircleMod]() {
         HandleClick(
             ui->buttonCircleMod,
-            [this](const Common::ParamPackage& params) {
-                for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs;
-                     analog_id++) {
-                    SetAnalogButton(params, analogs_param[analog_id], "modifier");
-                }
-                ApplyConfiguration();
-                Settings::SaveProfile(ui->profile->currentIndex());
+            [this, applyCircleMod](const Common::ParamPackage& params) {
+                while (circlemod_param.empty())
+                    circlemod_param.resize(1);
+                circlemod_param[0] = params;
+                // Trim trailing empty
+                while (!circlemod_param.empty() &&
+                       circlemod_param.back().Serialize().empty())
+                    circlemod_param.pop_back();
+                applyCircleMod();
             },
             InputCommon::Polling::DeviceType::Button);
     });
+    // Primary button context menu
     connect(ui->buttonCircleMod, &QPushButton::customContextMenuRequested, this,
-            [&](const QPoint& menu_location) {
-                QMenu context_menu;
-                context_menu.addAction(tr("Clear"), this, [&] {
-                    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs;
-                         analog_id++) {
-                        analogs_param[analog_id].Erase("modifier");
-                    }
-                    ui->buttonCircleMod->setText(tr("[not set]"));
-                    ApplyConfiguration();
-                    Settings::SaveProfile(ui->profile->currentIndex());
-                });
-
-                context_menu.addAction(tr("Restore Default"), this, [&] {
-                    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs;
-                         analog_id++) {
-                        Common::ParamPackage params{InputCommon::GenerateKeyboardParam(
-                            QtConfig::default_analogs[analog_id][static_cast<u32>(
-                                AnalogSubButtons::modifier)])};
-                        SetAnalogButton(params, analogs_param[analog_id], "modifier");
-                        ui->buttonCircleMod->setText(
-                            AnalogToText(analogs_param[analog_id], "modifier"));
-                    }
-                    ApplyConfiguration();
-                    Settings::SaveProfile(ui->profile->currentIndex());
-                });
-                context_menu.exec(ui->buttonCircleMod->mapToGlobal(menu_location));
+            [this, buildCircleModMenu](const QPoint& pos) {
+                buildCircleModMenu(0, pos, ui->buttonCircleMod);
             });
+
+    // Set gridLayout_7 row stretch programmatically (the .ui string format
+    // is not understood by the Qt uic). Row 0/1 (FaceButtons, DPad, CirclePad,
+    // CStick) should expand; row 2/3 (Shoulder Buttons, Misc.) should stay compact.
+    if (ui->gridLayout_7) {
+        ui->gridLayout_7->setRowStretch(0, 1);
+        ui->gridLayout_7->setRowStretch(1, 1);
+        ui->gridLayout_7->setRowStretch(2, 0);
+    }
+
+    // --- Touch screen coordinate mapping ---
+    // 15 independent touch points; each has its own X/Y sliders and up to 5 key bindings.
+    {
+        auto* touchGroup = new QGroupBox(tr("Touch Screen Mapping"), this);
+        touchGroup->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+        touchGroup->setMinimumHeight(0);
+        auto* touchOuterLayout = new QVBoxLayout(touchGroup);
+        touchOuterLayout->setSizeConstraint(QLayout::SetMinimumSize);
+
+        for (int point = 0; point < MAX_TOUCH_POINTS; point++) {
+            // Each point gets its own sub-group with a numbered title
+            auto* pointBox = new QGroupBox(
+                tr("Point %1").arg(point + 1), touchGroup);
+            auto* pointLayout = new QVBoxLayout(pointBox);
+
+            // X slider (independent per point)
+            auto* xSlider = new QSlider(Qt::Horizontal, pointBox);
+            xSlider->setRange(0, 100);
+            xSlider->setValue(50);
+            auto* xLabel = new QLabel(tr("X: 50%"), pointBox);
+            auto* xRow = new QHBoxLayout();
+            xRow->addWidget(new QLabel(tr("Screen X %:"), pointBox));
+            xRow->addWidget(xSlider);
+            xRow->addWidget(xLabel);
+            pointLayout->addLayout(xRow);
+
+            // Y slider (independent per point)
+            auto* ySlider = new QSlider(Qt::Horizontal, pointBox);
+            ySlider->setRange(0, 100);
+            ySlider->setValue(50);
+            auto* yLabel = new QLabel(tr("Y: 50%"), pointBox);
+            auto* yRow = new QHBoxLayout();
+            yRow->addWidget(new QLabel(tr("Screen Y %:"), pointBox));
+            yRow->addWidget(ySlider);
+            yRow->addWidget(yLabel);
+            pointLayout->addLayout(yRow);
+
+            // 5 key binding slots; only slot 0 visible by default, others revealed
+            // as the user binds them (or one extra is shown when slot 0 is bound).
+            std::vector<QPushButton*> slotBtns;
+            for (int s = 0; s < MAX_KEYS_PER_POINT; s++) {
+                QPushButton* keyBtn = new QPushButton(tr("[not set]"), pointBox);
+                keyBtn->setMinimumHeight(24);
+                keyBtn->setContextMenuPolicy(Qt::CustomContextMenu);
+                // Slot 0 is the primary; hide slots 1..N until needed.
+                // Final visibility is fully determined by UpdateTouchPointsMultiKeySlots.
+                keyBtn->setVisible(s == 0);
+                pointLayout->addWidget(keyBtn);
+                slotBtns.push_back(keyBtn);
+
+                int cap = s;
+                connect(keyBtn, &QPushButton::clicked, this,
+                        [this, point, cap, keyBtn, xSlider, ySlider]() {
+                            HandleClick(
+                                keyBtn,
+                                [this, point, cap, xSlider, ySlider](Common::ParamPackage params) {
+                                    int xp = xSlider->value();
+                                    int yp = ySlider->value();
+                                    params.Set("x", xp);
+                                    params.Set("y", yp);
+                                    while ((int)touch_points_param.size() <= point)
+                                        touch_points_param.resize(point + 1);
+                                    while ((int)touch_points_param[point].size() <= cap)
+                                        touch_points_param[point].push_back(
+                                            Common::ParamPackage{});
+                                    touch_points_param[point][cap] = params;
+                                    UpdateTouchPointsMultiKeySlots();
+                                },
+                                InputCommon::Polling::DeviceType::Button);
+                        });
+
+                connect(keyBtn, &QPushButton::customContextMenuRequested, this,
+                        [this, point, cap, keyBtn](const QPoint& pos) {
+                            QMenu context_menu;
+                            if (point < (int)touch_points_param.size() &&
+                                cap < (int)touch_points_param[point].size() &&
+                                !touch_points_param[point][cap].Serialize().empty()) {
+                                context_menu.addAction(tr("Clear"), this, [this, point, cap] {
+                                    if (point < (int)touch_points_param.size() &&
+                                        cap < (int)touch_points_param[point].size()) {
+                                        touch_points_param[point].erase(
+                                            touch_points_param[point].begin() + cap);
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                            }
+                            context_menu.addAction(tr("Clear All"), this, [this, point] {
+                                if (point < (int)touch_points_param.size())
+                                    touch_points_param[point].clear();
+                                UpdateTouchPointsMultiKeySlots();
+                            });
+                            context_menu.exec(keyBtn->mapToGlobal(pos));
+                        });
+            }
+
+            // Slider value-change handlers: update labels and the per-point coords
+            connect(xSlider, &QSlider::valueChanged, this,
+                    [this, point, xLabel](int v) {
+                        xLabel->setText(QStringLiteral("X: %1%").arg(v));
+                        if (point < (int)touch_points_param.size())
+                            for (auto& p : touch_points_param[point]) p.Set("x", v);
+                    });
+            connect(ySlider, &QSlider::valueChanged, this,
+                    [this, point, yLabel](int v) {
+                        yLabel->setText(QStringLiteral("Y: %1%").arg(v));
+                        if (point < (int)touch_points_param.size())
+                            for (auto& p : touch_points_param[point]) p.Set("y", v);
+                    });
+
+        touch_point_widgets.push_back({xSlider, ySlider, slotBtns, pointBox});
+        touchOuterLayout->addWidget(pointBox);
+    }
+
+    // Hide all points/slots beyond what's actually configured
+    UpdateTouchPointsMultiKeySlots();
+
+    // Add to gridLayout_7, row 3 (below Misc/Shoulders), spanning both columns
+        ui->gridLayout_7->addWidget(touchGroup, 3, 0, 1, 2);
+        ui->gridLayout_7->setRowStretch(3, 0);
+        ui->gridLayout_7->setRowMinimumHeight(3, 0);
+    }
 
     connect(ui->buttonMotionTouch, &QPushButton::clicked, this, [this] {
         ui->buttonMotionTouch->setEnabled(false);
@@ -422,13 +908,38 @@ ConfigureInput::~ConfigureInput() = default;
 void ConfigureInput::ApplyConfiguration() {
 
     Settings::values.use_artic_base_controller = ui->use_artic_controller->isChecked();
+    Settings::values.use_adaptive_controller_mapping = ui->use_adaptive_controller_mapping->isChecked();
 
-    std::transform(buttons_param.begin(), buttons_param.end(),
-                   Settings::values.current_input_profile.buttons.begin(),
-                   [](const Common::ParamPackage& param) { return param.Serialize(); });
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++) {
+        Settings::values.current_input_profile.buttons[i].clear();
+        for (const auto& param : buttons_param[i]) {
+            std::string serialized = param.Serialize();
+            if (!serialized.empty())
+                Settings::values.current_input_profile.buttons[i].push_back(std::move(serialized));
+        }
+    }
+    SyncCircleModToAnalogs();
     std::transform(analogs_param.begin(), analogs_param.end(),
                    Settings::values.current_input_profile.analogs.begin(),
                    [](const Common::ParamPackage& param) { return param.Serialize(); });
+
+    // Touch screen coordinate bindings (nested: points -> keys)
+    Settings::values.current_input_profile.touch_points.clear();
+    for (const auto& point_keys : touch_points_param) {
+        std::vector<std::string> serialized_point;
+        serialized_point.reserve(point_keys.size());
+        for (const auto& p : point_keys) {
+            std::string s = p.Serialize();
+            if (!s.empty())
+                serialized_point.push_back(std::move(s));
+        }
+        // Always write the entry, even if empty, so slot positions are preserved
+        Settings::values.current_input_profile.touch_points.push_back(
+            std::move(serialized_point));
+    }
+
+    // Sync memory profile back to the input_profiles array so config->Save() persists it
+    Settings::SaveProfile(Settings::values.current_input_profile_index);
 }
 
 void ConfigureInput::ApplyProfile() {
@@ -446,9 +957,10 @@ void ConfigureInput::OnHotkeysChanged(QList<QKeySequence> new_key_list) {
 QList<QKeySequence> ConfigureInput::GetUsedKeyboardKeys() {
     QList<QKeySequence> list;
     for (int button = 0; button < Settings::NativeButton::NumButtons; button++) {
-        const auto& button_param = buttons_param[button];
-        if (button_param.Get("engine", "") == "keyboard") {
-            list << QKeySequence(button_param.Get("code", 0));
+        for (const auto& button_param : buttons_param[button]) {
+            if (!button_param.Serialize().empty() && button_param.Get("engine", "") == "keyboard") {
+                list << QKeySequence(button_param.Get("code", 0));
+            }
         }
     }
 
@@ -471,19 +983,89 @@ void ConfigureInput::LoadConfiguration() {
     ui->use_artic_controller->setChecked(Settings::values.use_artic_base_controller.GetValue());
     ui->use_artic_controller->setEnabled(!system.IsPoweredOn());
 
-    std::transform(Settings::values.current_input_profile.buttons.begin(),
-                   Settings::values.current_input_profile.buttons.end(), buttons_param.begin(),
-                   [](const std::string& str) { return Common::ParamPackage(str); });
+    ui->use_adaptive_controller_mapping->setChecked(
+        Settings::values.use_adaptive_controller_mapping.GetValue());
+
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++) {
+        buttons_param[i].clear();
+        for (const auto& str : Settings::values.current_input_profile.buttons[i]) {
+            buttons_param[i].push_back(Common::ParamPackage(str));
+        }
+    }
     std::transform(Settings::values.current_input_profile.analogs.begin(),
                    Settings::values.current_input_profile.analogs.end(), analogs_param.begin(),
                    [](const std::string& str) { return Common::ParamPackage(str); });
+    LoadCircleModFromAnalogs();
+    // Load touch screen coordinate bindings (nested: points -> keys)
+    touch_points_param.clear();
+    for (const auto& point_keys :
+         Settings::values.current_input_profile.touch_points) {
+        std::vector<Common::ParamPackage> per_point;
+        per_point.reserve(point_keys.size());
+        for (const auto& s : point_keys) {
+            per_point.push_back(Common::ParamPackage(s));
+        }
+        touch_points_param.push_back(std::move(per_point));
+    }
     UpdateButtonLabels();
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++)
+        UpdateMultiKeySlots(i);
+    UpdateTouchPointsMultiKeySlots();
+    // Sync slider positions from loaded params
+    for (int point = 0; point < (int)touch_point_widgets.size() &&
+                        point < (int)touch_points_param.size();
+         point++) {
+        const auto& w = touch_point_widgets[point];
+        if (touch_points_param[point].empty()) continue;
+        // Use first binding's x/y; if absent, default 50
+        int xv = touch_points_param[point][0].Get("x", 50);
+        int yv = touch_points_param[point][0].Get("y", 50);
+        w.x_slider->setValue(xv);
+        w.y_slider->setValue(yv);
+    }
 }
 
 void ConfigureInput::RestoreDefaults() {
     for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
-        buttons_param[button_id] = Common::ParamPackage{
-            InputCommon::GenerateKeyboardParam(QtConfig::default_buttons[button_id])};
+        buttons_param[button_id].clear();
+        for (const auto& b : QtConfig::default_buttons[button_id])
+            buttons_param[button_id].push_back(Common::ParamPackage{b});
+        // Explicitly add SDL virtual controller defaults (same workaround
+        // as in config.cpp ReadControlValues — toolchain brace-init bug).
+        switch (button_id) {
+        case Settings::NativeButton::Up:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:11,port:0"});
+            break;
+        case Settings::NativeButton::Down:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:12,port:0"});
+            break;
+        case Settings::NativeButton::Left:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:13,port:0"});
+            break;
+        case Settings::NativeButton::Right:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:14,port:0"});
+            break;
+        case Settings::NativeButton::L:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:9,port:0"});
+            break;
+        case Settings::NativeButton::R:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"engine:sdl,gc_button:10,port:0"});
+            break;
+        case Settings::NativeButton::ZL:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"direction:+,engine:sdl,gc_axis:4,port:0,threshold:0.5"});
+            break;
+        case Settings::NativeButton::ZR:
+            buttons_param[button_id].push_back(
+                Common::ParamPackage{"direction:+,engine:sdl,gc_axis:5,port:0,threshold:0.5"});
+            break;
+        }
     }
 
     for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
@@ -491,8 +1073,38 @@ void ConfigureInput::RestoreDefaults() {
             QtConfig::default_analogs[analog_id][0], QtConfig::default_analogs[analog_id][1],
             QtConfig::default_analogs[analog_id][2], QtConfig::default_analogs[analog_id][3],
             QtConfig::default_analogs[analog_id][4], 0.5f)};
+        // Add SDL virtual controller stick defaults (same as config.cpp)
+        const int axis_x = (analog_id == 0) ? 0 : 2;
+        const int axis_y = (analog_id == 0) ? 1 : 3;
+        auto add_sdl = [&](const std::string& dir, const std::string& sign, int axis) {
+            std::string sdl = "direction:" + sign + ",engine:sdl,gc_axis:" +
+                              std::to_string(axis) + ",port:0,threshold:0.5";
+            analogs_param[analog_id].Set(dir + "_1", sdl);
+            analogs_param[analog_id].Set(dir + "_count", 2);
+        };
+        add_sdl("up", "-", axis_y);
+        add_sdl("down", "+", axis_y);
+        add_sdl("left", "-", axis_x);
+        add_sdl("right", "+", axis_x);
     }
+    circlemod_param.clear();
+    if (QtConfig::default_analogs[0][4] != 0)
+        circlemod_param.push_back(Common::ParamPackage{
+            InputCommon::GenerateKeyboardParam(
+                QtConfig::default_analogs[0][4])});
+    touch_points_param.clear();
+    // Reset touch point XY sliders to 50% default
+    for (auto& w : touch_point_widgets) {
+        w.x_slider->setValue(50);
+        w.y_slider->setValue(50);
+    }
+    // Restore "Adaptive Button Mapping" to its default (enabled)
+    ui->use_adaptive_controller_mapping->setChecked(true);
     UpdateButtonLabels();
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++)
+        UpdateMultiKeySlots(i);
+    UpdateCircleModMultiKeySlots();
+    UpdateTouchPointsMultiKeySlots();
 
     ApplyConfiguration();
     Settings::SaveProfile(Settings::values.current_input_profile_index);
@@ -500,29 +1112,320 @@ void ConfigureInput::RestoreDefaults() {
 
 void ConfigureInput::ClearAll() {
     for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
-        if (button_map[button_id] && button_map[button_id]->isEnabled())
-            buttons_param[button_id].Clear();
+        if (!button_map[button_id].empty() && button_map[button_id][0]->isEnabled())
+            buttons_param[button_id].clear();
     }
     for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
         analogs_param[analog_id].Clear();
     }
+    circlemod_param.clear();
+    touch_points_param.clear();
     UpdateButtonLabels();
+    for (int i = 0; i < Settings::NativeButton::NumButtons; i++)
+        UpdateMultiKeySlots(i);
+    UpdateCircleModMultiKeySlots();
+    UpdateTouchPointsMultiKeySlots();
 
     ApplyConfiguration();
     Settings::SaveProfile(Settings::values.current_input_profile_index);
 }
 
+void ConfigureInput::SetupMultiKeySlots(int button_id) {
+    auto* primary = button_map[button_id][0];
+    if (!primary) return;
+
+    QWidget* pw = primary->parentWidget();
+    if (!pw || !pw->layout()) return;
+
+    // Find the leaf layout containing the primary button — only store for
+    // lazy creation in UpdateMultiKeySlots. NO widgets are created here.
+    QLayout* leafLayout = nullptr;
+    std::function<QLayout*(QLayout*)> findLeaf =
+        [&](QLayout* l) -> QLayout* {
+        if (l->indexOf(primary) >= 0) return l;
+        for (int i = 0; i < l->count(); i++) {
+            if (auto* child = l->itemAt(i)->layout())
+                if (auto* found = findLeaf(child)) return found;
+        }
+        return nullptr;
+    };
+    leafLayout = findLeaf(pw->layout());
+    if (!leafLayout) return;
+
+    button_container_layouts[button_id] = leafLayout;
+    button_container_positions[button_id] = leafLayout->indexOf(primary);
+}
+
+void ConfigureInput::UpdateMultiKeySlots(int button_id) {
+    // Trim empty params from the back
+    while (!buttons_param[button_id].empty() &&
+           buttons_param[button_id].back().Serialize().empty())
+        buttons_param[button_id].pop_back();
+
+    int activeCount = (int)buttons_param[button_id].size();
+    bool needExtras = activeCount > 0;
+
+    // Lazy creation: build the extra-slot container ONLY when bindings exist.
+    // When bindings go to zero, destroy everything to guarantee zero layout footprint.
+    QWidget*& container = button_containers[button_id];
+    if (needExtras && !container) {
+        // --- Create on demand ---
+        auto* primary = button_map[button_id][0];
+        QWidget* pw = primary->parentWidget();
+        QLayout* leafLayout = button_container_layouts[button_id];
+        int btnIdx = button_container_positions[button_id];
+
+        container = new QWidget(pw);
+        QVBoxLayout* vbox = new QVBoxLayout(container);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        vbox->setSpacing(1);
+
+        for (int slot = 1; slot < MAX_BINDINGS_PER_BUTTON; slot++) {
+            QPushButton* extra = new QPushButton(tr("[extra not set]"), container);
+            extra->setMinimumHeight(24);
+            extra->hide();
+            vbox->addWidget(extra);
+            button_map[button_id].push_back(extra);
+
+            extra->setContextMenuPolicy(Qt::CustomContextMenu);
+            int slotCapture = slot;
+            connect(extra, &QPushButton::clicked, [this, button_id, slotCapture, extra]() {
+                HandleClick(
+                    extra,
+                    [this, button_id, slotCapture](Common::ParamPackage params) {
+                        if (button_id == Settings::NativeButton::ZL ||
+                            button_id == Settings::NativeButton::ZR) {
+                            params.Set("direction", "+");
+                            params.Set("threshold", "0.5");
+                        }
+                        while ((int)buttons_param[button_id].size() <= slotCapture)
+                            buttons_param[button_id].resize(slotCapture + 1);
+                        buttons_param[button_id][slotCapture] = std::move(params);
+                        while (!buttons_param[button_id].empty() &&
+                               buttons_param[button_id].back().Serialize().empty())
+                            buttons_param[button_id].pop_back();
+                        UpdateMultiKeySlots(button_id);
+                    },
+                    InputCommon::Polling::DeviceType::Button);
+            });
+            connect(extra, &QPushButton::customContextMenuRequested, this,
+                    [this, button_id, slotCapture](const QPoint&) {
+                        QMenu context_menu;
+                        if ((int)buttons_param[button_id].size() > slotCapture &&
+                            !buttons_param[button_id][slotCapture].Serialize().empty()) {
+                            context_menu.addAction(tr("Clear"), this, [=] {
+                                if ((int)buttons_param[button_id].size() > slotCapture)
+                                    buttons_param[button_id].erase(
+                                        buttons_param[button_id].begin() + slotCapture);
+                                UpdateMultiKeySlots(button_id);
+                            });
+                        }
+                        context_menu.addAction(tr("Clear All"), this, [=] {
+                            buttons_param[button_id].clear();
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addAction(tr("Restore Default"), this, [=] {
+                            buttons_param[button_id].clear();
+                            buttons_param[button_id].clear();
+                            for (const auto& b : QtConfig::default_buttons[button_id])
+                                buttons_param[button_id].push_back(Common::ParamPackage{b});
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addSeparator();
+                        // Mouse button bindings
+                        context_menu.addAction(tr("Mouse: Left Button"), this, [=] {
+                            while ((int)buttons_param[button_id].size() <= slotCapture)
+                                buttons_param[button_id].resize(slotCapture + 1);
+                            buttons_param[button_id][slotCapture] =
+                                Common::ParamPackage{"engine:mouse,button:left"};
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addAction(tr("Mouse: Right Button"), this, [=] {
+                            while ((int)buttons_param[button_id].size() <= slotCapture)
+                                buttons_param[button_id].resize(slotCapture + 1);
+                            buttons_param[button_id][slotCapture] =
+                                Common::ParamPackage{"engine:mouse,button:right"};
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addAction(tr("Mouse: Middle Button"), this, [=] {
+                            while ((int)buttons_param[button_id].size() <= slotCapture)
+                                buttons_param[button_id].resize(slotCapture + 1);
+                            buttons_param[button_id][slotCapture] =
+                                Common::ParamPackage{"engine:mouse,button:middle"};
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addAction(tr("Mouse: Wheel Up"), this, [=] {
+                            while ((int)buttons_param[button_id].size() <= slotCapture)
+                                buttons_param[button_id].resize(slotCapture + 1);
+                            buttons_param[button_id][slotCapture] =
+                                Common::ParamPackage{"engine:mouse,axis:wheel,value:up"};
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.addAction(tr("Mouse: Wheel Down"), this, [=] {
+                            while ((int)buttons_param[button_id].size() <= slotCapture)
+                                buttons_param[button_id].resize(slotCapture + 1);
+                            buttons_param[button_id][slotCapture] =
+                                Common::ParamPackage{"engine:mouse,axis:wheel,value:down"};
+                            UpdateMultiKeySlots(button_id);
+                        });
+                        context_menu.exec(QCursor::pos());
+                    });
+        }
+
+        // Insert container into layout (first time only)
+        if (auto* box = qobject_cast<QBoxLayout*>(leafLayout))
+            box->insertWidget(btnIdx + 1, container);
+        else if (auto* grid = qobject_cast<QGridLayout*>(leafLayout)) {
+            int row, col, rowSpan, colSpan;
+            grid->getItemPosition(btnIdx, &row, &col, &rowSpan, &colSpan);
+            grid->addWidget(container, row + rowSpan, col, 1, colSpan);
+        }
+    }
+
+    int showCount = std::min(activeCount + 1, MAX_BINDINGS_PER_BUTTON);
+    showCount = std::max(showCount, 1);
+
+    // Update text for the primary and any extras
+    for (int slot = 0; slot < (int)button_map[button_id].size(); slot++) {
+        auto* btn = button_map[button_id][slot];
+        if (slot < showCount) {
+            QString txt;
+            if (slot < activeCount) {
+                txt = ButtonToText(buttons_param[button_id][slot]);
+                btn->setText(txt);
+            } else if (slot > 0) {
+                txt = tr("[extra not set]");
+                btn->setText(txt);
+            } else {
+                txt = tr("[not set]");
+                btn->setText(txt);
+            }
+            btn->show();
+        } else {
+            if (slot > 0) btn->hide();
+        }
+    }
+
+    // Destroy extras when no bindings remain
+    if (!needExtras && container) {
+        auto* leafLayout = button_container_layouts[button_id];
+        if (leafLayout && leafLayout->indexOf(container) >= 0)
+            leafLayout->removeWidget(container);
+        container->deleteLater();
+        container = nullptr;
+        // Trim button_map back to just the primary
+        button_map[button_id].resize(1);
+    }
+
+    if (container)
+        container->setVisible(needExtras);
+}
+
+void ConfigureInput::SetupAnalogMultiKeySlots(int analog_id, int sub_button_id) {
+    if (analog_map_buttons[analog_id][sub_button_id].empty()) return;
+    auto* primary = analog_map_buttons[analog_id][sub_button_id][0];
+    if (!primary) return;
+
+    QWidget* pw = primary->parentWidget();
+    if (!pw || !pw->layout()) return;
+
+    // Find the leaf layout containing the primary button
+    QLayout* leafLayout = nullptr;
+    std::function<QLayout*(QLayout*)> findLeaf = [&](QLayout* l) -> QLayout* {
+        if (l->indexOf(primary) >= 0) return l;
+        for (int i = 0; i < l->count(); i++) {
+            if (auto* child = l->itemAt(i)->layout())
+                if (auto* found = findLeaf(child)) return found;
+        }
+        return nullptr;
+    };
+    leafLayout = findLeaf(pw->layout());
+    if (!leafLayout) return;
+
+    int btnIdx = leafLayout->indexOf(primary);
+
+    // Create a container widget for extra binding slots.
+    // Deferred insertion: kept out of layout until showCount > 1
+    QWidget* container = new QWidget(pw);
+    QVBoxLayout* vbox = new QVBoxLayout(container);
+    vbox->setContentsMargins(0, 0, 0, 0);
+    vbox->setSpacing(1);
+
+    for (int slot = 1; slot < MAX_BINDINGS_PER_BUTTON; slot++) {
+        QPushButton* extra = new QPushButton(tr("[extra not set]"), container);
+        extra->setMinimumHeight(24);
+        extra->hide();
+        vbox->addWidget(extra);
+        analog_map_buttons[analog_id][sub_button_id].push_back(extra);
+    }
+
+    container->hide();
+    analog_button_containers[analog_id][sub_button_id] = container;
+    analog_button_container_layouts[analog_id][sub_button_id] = leafLayout;
+    analog_button_container_positions[analog_id][sub_button_id] = btnIdx;
+}
+
+void ConfigureInput::UpdateAnalogMultiKeySlots(int analog_id, int sub_button_id) {
+    const auto& dir = analog_sub_buttons[sub_button_id];
+    int cnt = AnalogButtonCount(analogs_param[analog_id], dir);
+    int showCount = std::min(cnt + 1, (int)analog_map_buttons[analog_id][sub_button_id].size());
+    showCount = std::max(showCount, 1);
+
+    auto* container = analog_button_containers[analog_id][sub_button_id];
+    auto* leafLayout = analog_button_container_layouts[analog_id][sub_button_id];
+    int btnIdx = analog_button_container_positions[analog_id][sub_button_id];
+
+    // Deferred container management: insert when extras needed, remove when not
+    bool hasExtras = showCount > 1;
+    bool inLayout = leafLayout && leafLayout->indexOf(container) >= 0;
+
+    if (hasExtras && !inLayout) {
+        if (auto* box = qobject_cast<QBoxLayout*>(leafLayout))
+            box->insertWidget(btnIdx + 1, container);
+        else if (auto* grid = qobject_cast<QGridLayout*>(leafLayout)) {
+            int row, col, rowSpan, colSpan;
+            grid->getItemPosition(btnIdx, &row, &col, &rowSpan, &colSpan);
+            grid->addWidget(container, row + rowSpan, col, 1, colSpan);
+        }
+    } else if (!hasExtras && inLayout) {
+        leafLayout->removeWidget(container);
+    }
+    if (container)
+        container->setVisible(hasExtras);
+
+    for (int slot = 0; slot < (int)analog_map_buttons[analog_id][sub_button_id].size(); slot++) {
+        auto* btn = analog_map_buttons[analog_id][sub_button_id][slot];
+        if (slot < showCount) {
+            if (slot < cnt)
+                btn->setText(ButtonToText(AnalogButtonN(analogs_param[analog_id], dir, slot)));
+            else if (slot > 0)
+                btn->setText(tr("[extra not set]"));
+            else
+                btn->setText(tr("[not set]"));
+            btn->show();
+        } else {
+            if (slot > 0) btn->hide();
+        }
+    }
+}
+
 void ConfigureInput::UpdateButtonLabels() {
     for (int button = 0; button < Settings::NativeButton::NumButtons; button++) {
-        if (button_map[button])
-            button_map[button]->setText(ButtonToText(buttons_param[button]));
+        for (int slot = 0; slot < (int)button_map[button].size(); slot++) {
+            if (button_map[button][slot] && slot < (int)buttons_param[button].size() &&
+                !buttons_param[button][slot].Serialize().empty())
+                button_map[button][slot]->setText(ButtonToText(buttons_param[button][slot]));
+            else if (button_map[button][slot])
+                button_map[button][slot]->setText(
+                    slot > 0 ? tr("[extra not set]") : tr("[not set]"));
+        }
     }
 
     for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
         for (int sub_button_id = 0; sub_button_id < ANALOG_SUB_BUTTONS_NUM; sub_button_id++) {
-            if (analog_map_buttons[analog_id][sub_button_id]) {
-                analog_map_buttons[analog_id][sub_button_id]->setText(
-                    AnalogToText(analogs_param[analog_id], analog_sub_buttons[sub_button_id]));
+            if (!analog_map_buttons[analog_id][sub_button_id].empty() &&
+                analog_map_buttons[analog_id][sub_button_id][0]) {
+                UpdateAnalogMultiKeySlots(analog_id, sub_button_id);
             }
         }
         analog_map_stick[analog_id]->setText(tr("Set Analog Stick"));
@@ -552,7 +1455,14 @@ void ConfigureInput::UpdateButtonLabels() {
         }
     }
 
-    ui->buttonCircleMod->setText(AnalogToText(analogs_param[0], "modifier"));
+    ui->buttonCircleMod->setText(
+        circlemod_param.empty() || circlemod_param[0].Serialize().empty()
+            ? tr("[not set]")
+            : ButtonToText(circlemod_param[0]));
+    UpdateCircleModMultiKeySlots();
+
+    // Touch screen points
+    UpdateTouchPointsMultiKeySlots();
 
     EmitInputKeysChanged();
 }
@@ -563,7 +1473,8 @@ void ConfigureInput::MapFromButton(const Common::ParamPackage& params) {
     for (int button_id = 0; button_id < Settings::NativeButton::NumButtons; button_id++) {
         aux_param = InputCommon::GetControllerButtonBinds(params, button_id);
         if (aux_param.Has("engine")) {
-            buttons_param[button_id] = aux_param;
+            buttons_param[button_id].clear();
+            buttons_param[button_id].push_back(aux_param);
             mapped = true;
         }
     }
@@ -651,12 +1562,11 @@ void ConfigureInput::keyPressEvent(QKeyEvent* event) {
 
     if (event->key() != Qt::Key_Escape && event->key() != previous_key_code) {
         if (want_keyboard_keys) {
-            // Check if key is already bound
-            if (hotkey_list.contains(QKeySequence(event->key())) ||
-                GetUsedKeyboardKeys().contains(QKeySequence(event->key()))) {
+            // Only prevent conflicts with hotkeys, allow same key across multiple buttons
+            if (hotkey_list.contains(QKeySequence(event->key()))) {
                 SetPollingResult({}, true);
                 QMessageBox::critical(this, tr("Error!"),
-                                      tr("You're using a key that's already bound."));
+                                      tr("You're using a key that's already bound to a hotkey."));
                 return;
             }
             SetPollingResult(Common::ParamPackage{InputCommon::GenerateKeyboardParam(event->key())},
@@ -741,4 +1651,263 @@ bool ConfigureInput::IsProfileNameDuplicate(const QString& name) const {
 void ConfigureInput::WarnProposedProfileNameIsDuplicate() {
     QMessageBox::warning(this, tr("Duplicate profile name"),
                          tr("Profile name already exists. Please choose a different name."));
+}
+
+// ----- CircleMod multi-key slot management -----
+
+void ConfigureInput::SetupCircleModMultiKeySlots() {
+    auto* primary = circlemod_button_map[0];
+    if (!primary)
+        return;
+    QWidget* pw = primary->parentWidget();
+    if (!pw || !pw->layout())
+        return;
+    // Find the leaf layout containing the primary button
+    std::function<QLayout*(QLayout*)> findLeaf =
+        [&](QLayout* l) -> QLayout* {
+        if (l->indexOf(primary) >= 0)
+            return l;
+        for (int i = 0; i < l->count(); i++) {
+            if (auto* child = l->itemAt(i)->layout())
+                if (auto* found = findLeaf(child))
+                    return found;
+        }
+        return nullptr;
+    };
+    circlemod_leaf_layout = findLeaf(pw->layout());
+    if (!circlemod_leaf_layout)
+        return;
+    circlemod_btn_position = circlemod_leaf_layout->indexOf(primary);
+}
+
+void ConfigureInput::UpdateCircleModMultiKeySlots() {
+    // Trim trailing empty params
+    while (!circlemod_param.empty() &&
+           circlemod_param.back().Serialize().empty())
+        circlemod_param.pop_back();
+
+    int activeCount = (int)circlemod_param.size();
+    bool needExtras = activeCount > 0;
+
+    // Lazy creation/destruction of the extra-slot container.
+    if (needExtras && !circlemod_container) {
+        auto* primary = circlemod_button_map[0];
+        QWidget* pw = primary->parentWidget();
+
+        circlemod_container = new QWidget(pw);
+        QVBoxLayout* vbox = new QVBoxLayout(circlemod_container);
+        vbox->setContentsMargins(0, 0, 0, 0);
+        vbox->setSpacing(1);
+
+        for (int slot = 1; slot < MAX_BINDINGS_PER_BUTTON; slot++) {
+            QPushButton* extra = new QPushButton(tr("[extra not set]"), circlemod_container);
+            extra->setMinimumHeight(24);
+            extra->hide();
+            vbox->addWidget(extra);
+            circlemod_button_map.push_back(extra);
+
+            extra->setContextMenuPolicy(Qt::CustomContextMenu);
+            int slotCapture = slot;
+            connect(extra, &QPushButton::clicked, [this, slotCapture, extra]() {
+                HandleClick(
+                    extra,
+                    [this, slotCapture](Common::ParamPackage params) {
+                        while ((int)circlemod_param.size() <= slotCapture)
+                            circlemod_param.resize(slotCapture + 1);
+                        circlemod_param[slotCapture] = std::move(params);
+                        while (!circlemod_param.empty() &&
+                               circlemod_param.back().Serialize().empty())
+                            circlemod_param.pop_back();
+                        UpdateCircleModMultiKeySlots();
+                        SyncCircleModToAnalogs();
+                        ApplyConfiguration();
+                        Settings::SaveProfile(ui->profile->currentIndex());
+                    },
+                    InputCommon::Polling::DeviceType::Button);
+            });
+            connect(extra, &QPushButton::customContextMenuRequested, this,
+                    [this, slotCapture, extra](const QPoint& pos) {
+                        QMenu context_menu;
+                        if (slotCapture < (int)circlemod_param.size() &&
+                            !circlemod_param[slotCapture].Serialize().empty()) {
+                            context_menu.addAction(tr("Clear"), this, [this, slotCapture] {
+                                if (slotCapture < (int)circlemod_param.size())
+                                    circlemod_param.erase(circlemod_param.begin() + slotCapture);
+                                UpdateCircleModMultiKeySlots();
+                                // Update primary button text (slot 0 — not handled by UpdateCircleModMultiKeySlots)
+                                if (circlemod_button_map[0]) {
+                                    circlemod_button_map[0]->setText(
+                                        circlemod_param.empty()
+                                            ? tr("[not set]")
+                                            : ButtonToText(circlemod_param[0]));
+                                }
+                                SyncCircleModToAnalogs();
+                                ApplyConfiguration();
+                                Settings::SaveProfile(ui->profile->currentIndex());
+                            });
+                        }
+                        context_menu.addAction(tr("Clear All"), this, [this] {
+                            circlemod_param.clear();
+                            UpdateCircleModMultiKeySlots();
+                            if (circlemod_button_map[0])
+                                circlemod_button_map[0]->setText(tr("[not set]"));
+                            SyncCircleModToAnalogs();
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.addAction(tr("Restore Default"), this, [this] {
+                            circlemod_param.clear();
+                            circlemod_param.push_back(Common::ParamPackage{
+                                InputCommon::GenerateKeyboardParam(
+                                    QtConfig::default_analogs[0][4])});
+                            UpdateCircleModMultiKeySlots();
+                            SyncCircleModToAnalogs();
+                            ApplyConfiguration();
+                            Settings::SaveProfile(ui->profile->currentIndex());
+                        });
+                        context_menu.exec(extra->mapToGlobal(pos));
+                    });
+        }
+
+        // Insert container after the primary button in the leaf layout
+        circlemod_leaf_layout->removeWidget(circlemod_container);
+        QBoxLayout* box = qobject_cast<QBoxLayout*>(circlemod_leaf_layout);
+        if (box)
+            box->insertWidget(circlemod_btn_position + 1, circlemod_container);
+        else
+            circlemod_leaf_layout->addWidget(circlemod_container);
+    } else if (!needExtras && circlemod_container) {
+        // Destroy container when no bindings remain
+        if (circlemod_leaf_layout && circlemod_leaf_layout->indexOf(circlemod_container) >= 0)
+            circlemod_leaf_layout->removeWidget(circlemod_container);
+        circlemod_container->deleteLater();
+        circlemod_container = nullptr;
+        // Trim button_map back to just the primary
+        circlemod_button_map.resize(1);
+    }
+
+    if (circlemod_container)
+        circlemod_container->setVisible(needExtras);
+
+    // Update visibility and text for extra buttons (slot 0 = primary, handled in UpdateButtonLabels)
+    int showCount = std::min(activeCount + 1, MAX_BINDINGS_PER_BUTTON);
+    for (int slot = 1; slot < (int)circlemod_button_map.size(); slot++) {
+        QPushButton* btn = circlemod_button_map[slot];
+        if (!btn)
+            continue;
+        if (slot < showCount) {
+            if (slot < activeCount)
+                btn->setText(ButtonToText(circlemod_param[slot]));
+            else
+                btn->setText(tr("[extra not set]"));
+            btn->show();
+        } else {
+            btn->hide();
+        }
+    }
+}
+
+void ConfigureInput::SyncCircleModToAnalogs() {
+    for (int analog_id = 0; analog_id < Settings::NativeAnalog::NumAnalogs; analog_id++) {
+        ClearAnalogButtons(analogs_param[analog_id], "modifier");
+        for (int i = 0; i < (int)circlemod_param.size(); i++) {
+            if (!circlemod_param[i].Serialize().empty())
+                SetAnalogButtonN(analogs_param[analog_id], "modifier", i, circlemod_param[i]);
+        }
+    }
+}
+
+void ConfigureInput::LoadCircleModFromAnalogs() {
+    circlemod_param.clear();
+    // Read multi-key format: modifier_0, modifier_1, ..., modifier_count
+    int cnt = analogs_param[0].Get("modifier_count", 0);
+    for (int i = 0; i < cnt; i++) {
+        std::string key = "modifier_" + std::to_string(i);
+        if (analogs_param[0].Has(key)) {
+            circlemod_param.push_back(Common::ParamPackage(analogs_param[0].Get(key, "")));
+        }
+    }
+    // Fall back to legacy single "modifier:" key, but skip code:0 (cleared default)
+    if (circlemod_param.empty() && analogs_param[0].Has("modifier")) {
+        auto pkg = Common::ParamPackage(analogs_param[0].Get("modifier", ""));
+        if (pkg.Get("code", 0) != 0)
+            circlemod_param.push_back(std::move(pkg));
+    }
+}
+
+void ConfigureInput::SetupTouchPointsMultiKeySlots() {
+    // Already set up in constructor; this is a placeholder for consistency.
+}
+
+void ConfigureInput::UpdateTouchPointsMultiKeySlots() {
+    // touch_points_param is now: vector<vector<ParamPackage>>
+    // outer index = point (0..MAX_TOUCH_POINTS-1)
+    // inner index = key binding slot (0..MAX_KEYS_PER_POINT-1)
+    //
+    // Visibility rules:
+    //   - The whole Point group box is shown only if any binding exists in this point,
+    //     OR if the previous point has a binding (so you can configure the next one).
+    //   - Within a Point: slot 0 is always shown. Slot k>0 is shown only if
+    //     slots [0..k-1] all have bindings (i.e. you fill slots in order).
+    for (int point = 0; point < (int)touch_point_widgets.size(); point++) {
+        const auto& w = touch_point_widgets[point];
+
+        // Has the user bound anything in this point?
+        bool any_bound = false;
+        if (point < (int)touch_points_param.size()) {
+            for (const auto& b : touch_points_param[point]) {
+                if (!b.Serialize().empty()) {
+                    any_bound = true;
+                    break;
+                }
+            }
+        }
+        // Should the previous point's box be visible because of a next-point chain?
+        // (No - we just hide later points until they're activated.)
+        // Visibility of the group box itself:
+        // Point 0 is always visible so user can start a new mapping.
+        // Point k>0 is visible only if a binding exists in Point k-1 (chain).
+        bool has_prev_bound = false;
+        if (point > 0 && (point - 1) < (int)touch_points_param.size()) {
+            for (const auto& b : touch_points_param[point - 1]) {
+                if (!b.Serialize().empty()) {
+                    has_prev_bound = true;
+                    break;
+                }
+            }
+        }
+        w.group->setVisible(point == 0 || any_bound || has_prev_bound);
+
+        // Per-slot text and visibility
+        for (int s = 0; s < (int)w.key_buttons.size(); s++) {
+            QPushButton* btn = w.key_buttons[s];
+            if (!btn) continue;
+            bool bound = (point < (int)touch_points_param.size() &&
+                          s < (int)touch_points_param[point].size() &&
+                          !touch_points_param[point][s].Serialize().empty());
+            if (bound) {
+                btn->setText(ButtonToText(touch_points_param[point][s]));
+            } else {
+                btn->setText(tr("[not set]"));
+            }
+            // Slot 0 is always visible when the point group is visible,
+            // so the user can always set the primary key.
+            if (s == 0) {
+                btn->setVisible(w.group->isVisible());
+                btn->show();
+            } else {
+                bool prev_all_bound = true;
+                for (int k = 0; k < s; k++) {
+                    bool kb = (point < (int)touch_points_param.size() &&
+                               k < (int)touch_points_param[point].size() &&
+                               !touch_points_param[point][k].Serialize().empty());
+                    if (!kb) {
+                        prev_all_bound = false;
+                        break;
+                    }
+                }
+                btn->setVisible(w.group->isVisible() && prev_all_bound);
+            }
+        }
+    }
 }

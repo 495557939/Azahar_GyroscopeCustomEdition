@@ -143,6 +143,7 @@
      <addaction name="action_Screen_Layout_Separate_Windows"/>
      <addaction name="action_Screen_Layout_Hybrid_Screen"/>
      <addaction name="action_Screen_Layout_Custom_Layout"/>
+     <addaction name="action_Screen_Layout_Custom_Layout_Percent"/>
      <addaction name="separator"/>
      <addaction name="action_Screen_Layout_Upright_Screens"/>
      <addaction name="action_Screen_Layout_Swap_Screens"/>
@@ -631,6 +632,14 @@
    </property>
    <property name="text">
     <string>Custom Layout</string>
+   </property>
+  </action>
+  <action name="action_Screen_Layout_Custom_Layout_Percent">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>Custom Layout (Percent)</string>
    </property>
   </action>
   <action name="action_Small_Screen_TopRight">

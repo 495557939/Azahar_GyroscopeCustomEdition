@@ -4,6 +4,9 @@
 
 #include <array>
 #include <QCloseEvent>
+#include <QBoxLayout>
+#include <QDoubleSpinBox>
+#include <QCheckBox>
 #include <QLabel>
 #include <QMessageBox>
 #include <QPushButton>
@@ -76,9 +79,16 @@ void CalibrationConfigurationDialog::UpdateButtonText(const QString& text) {
 }
 
 constexpr std::array<std::pair<const char*, const char*>, 3> MotionProviders = {{
-    {"motion_emu", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Mouse (Right Click)")},
+    {"motion_emu", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Mouse")},
     {"cemuhookudp", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "CemuhookUDP")},
     {"sdl", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "SDL")},
+}};
+
+constexpr std::array<std::pair<const char*, const char*>, 6> MotionEmuModes = {{
+    {"rate_hold", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Right Click (Gyro)")},
+    {"rate_continuous", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Always On (Gyro)")},
+    {"tilt_continuous", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Always On (Tilt New)")},
+    {"tilt_hold", QT_TRANSLATE_NOOP("ConfigureMotionTouch", "Right Click (Tilt New)")},
 }};
 
 constexpr std::array<std::pair<const char*, const char*>, 2> TouchProviders = {{
@@ -90,8 +100,176 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
     : QDialog(parent), ui(std::make_unique<Ui::ConfigureMotionTouch>()),
       timeout_timer(std::make_unique<QTimer>()), poll_timer(std::make_unique<QTimer>()) {
     ui->setupUi(this);
+
+    // Create Max Tilt Angle controls (not in .ui file)
+    motion_tilt_max_label = new QLabel(tr("Max Tilt Angle:"), this);
+    motion_tilt_max_angle = new QDoubleSpinBox(this);
+    motion_tilt_max_angle->setRange(1.0, 180.0);
+    motion_tilt_max_angle->setDecimals(1);
+    motion_tilt_max_angle->setSingleStep(5.0);
+    motion_tilt_max_angle->setSuffix(QString::fromUtf8("°"));
+    motion_tilt_max_angle->setValue(90.0);
+
+    // Insert new row after sensitivity row (find layout and add before update_period row)
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            // Find the index of the update_period row and insert before it
+            int update_idx = group_layout->indexOf(ui->motion_update_label);
+            if (update_idx < 0) {
+                update_idx = group_layout->count();
+            }
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_tilt_max_label);
+            row_layout->addWidget(motion_tilt_max_angle);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Clamp pitch rotation to 180° checkbox
+    motion_clamp_pitch = new QCheckBox(tr("Limit Y-axis rotation to 180°"), this);
+    motion_clamp_pitch->setToolTip(tr("Prevents the 3DS view from flipping upside down by limiting pitch rotation to ±90°"));
+    motion_clamp_pitch->setChecked(true);
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_clamp_pitch);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Auto Y-axis tilt checkbox (default on)
+    motion_auto_tilt_y = new QCheckBox(tr("Auto Y-axis tilt"), this);
+    motion_auto_tilt_y->setToolTip(tr("Automatically tracks vertical device tilt from gyro/mouse input, preventing view from snapping back to flat"));
+    motion_auto_tilt_y->setChecked(true);
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_y);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Auto Y-axis tilt (inverted) checkbox
+    motion_auto_tilt_y_invert = new QCheckBox(tr("Auto Y-axis tilt (Inverted)"), this);
+    motion_auto_tilt_y_invert->setToolTip(tr("Inverts the auto Y-axis tilt direction. Overrides normal auto tilt when checked"));
+    motion_auto_tilt_y_invert->setChecked(false);
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_y_invert);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // [BETA] Auto X-axis tilt checkbox (default off)
+    motion_auto_tilt_x = new QCheckBox(tr("[BETA] Auto X-axis tilt"), this);
+    motion_auto_tilt_x->setToolTip(tr("BETA: Smoothly tilts the device left/right based on horizontal mouse movement. Returns to neutral when mouse stops"));
+    motion_auto_tilt_x->setChecked(false);
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_x);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Auto tilt tracking speed
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Auto X-tilt speed:"), this));
+            motion_auto_tilt_speed = new QDoubleSpinBox(this);
+            motion_auto_tilt_speed->setRange(0.1, 3.0);
+            motion_auto_tilt_speed->setSingleStep(0.1);
+            motion_auto_tilt_speed->setDecimals(1);
+            motion_auto_tilt_speed->setValue(1.0);
+            motion_auto_tilt_speed->setToolTip(tr("Scales [BETA] Auto X-tilt roll tracking speed. Higher = faster roll response to horizontal mouse movement"));
+            row_layout->addWidget(motion_auto_tilt_speed);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // ── Controller-to-Mouse Linking (only for Mouse motion provider) ──────
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (!group_layout)
+            return;
+
+        link_group = new QWidget(this);
+        auto* vbox = new QVBoxLayout(link_group);
+        vbox->setContentsMargins(0, 4, 0, 0);
+        vbox->setSpacing(2);
+
+        auto* header = new QLabel(tr("Controller Link (emulate mouse with gamepad):"), link_group);
+        header->setStyleSheet(QStringLiteral("font-weight: bold;"));
+        vbox->addWidget(header);
+
+        link_cstick = new QCheckBox(tr("Link 3DS Right Stick (C-Stick)"), link_group);
+        link_cstick->setToolTip(tr("Right analog stick movement generates virtual mouse delta"));
+        link_cstick->setChecked(true);
+        vbox->addWidget(link_cstick);
+
+        link_circle_pad = new QCheckBox(tr("Link 3DS Left Stick (Circle Pad)"), link_group);
+        link_circle_pad->setToolTip(tr("Left analog stick movement generates virtual mouse delta"));
+        vbox->addWidget(link_circle_pad);
+
+        link_dpad = new QCheckBox(tr("Link 3DS D-Pad"), link_group);
+        link_dpad->setToolTip(tr("D-Pad presses generate virtual mouse delta"));
+        vbox->addWidget(link_dpad);
+
+        link_abxy = new QCheckBox(tr("Link ABXY 3DS Layout"), link_group);
+        link_abxy->setToolTip(tr("ABXY buttons generate virtual mouse delta:\n"
+                                 "Top button (Y/N) = Up, Bottom (A/S) = Down,\n"
+                                 "Left (X/W) = Left, Right (B/E) = Right"));
+        vbox->addWidget(link_abxy);
+
+        auto* speed_row = new QHBoxLayout();
+        speed_row->addWidget(new QLabel(tr("Link Speed:"), link_group));
+        link_speed = new QDoubleSpinBox(link_group);
+        link_speed->setRange(0.1, 10.0);
+        link_speed->setSingleStep(0.1);
+        link_speed->setDecimals(1);
+        link_speed->setValue(0.4);
+        link_speed->setToolTip(tr("Multiplier for controller-link virtual mouse delta.\n"
+                                  "Higher = faster aiming with controller"));
+        speed_row->addWidget(link_speed);
+        vbox->addLayout(speed_row);
+
+        group_layout->addWidget(link_group);
+
+        // Show/hide link controls based on motion provider selection
+        connect(ui->motion_provider,
+                qOverload<int>(&QComboBox::currentIndexChanged), this,
+                [this](int) {
+                    QString provider = ui->motion_provider->currentData().toString();
+                    if (link_group)
+                        link_group->setVisible(provider == QStringLiteral("motion_emu"));
+                });
+    }
+
     for (const auto& [provider, name] : MotionProviders) {
         ui->motion_provider->addItem(tr(name), QString::fromUtf8(provider));
+    }
+    for (const auto& [mode_id, mode_name] : MotionEmuModes) {
+        ui->motion_mode->addItem(tr(mode_name), QString::fromUtf8(mode_id));
     }
     for (const auto& [provider, name] : TouchProviders) {
         ui->touch_provider->addItem(tr(name), QString::fromUtf8(provider));
@@ -135,6 +313,12 @@ void ConfigureMotionTouch::SetConfiguration() {
 
     ui->motion_provider->setCurrentIndex(
         ui->motion_provider->findData(QString::fromStdString(motion_engine)));
+    const std::string motion_mode = motion_param.Get("mode", "absolute");
+    int mode_idx = ui->motion_mode->findData(QString::fromStdString(motion_mode));
+    ui->motion_mode->setCurrentIndex(mode_idx >= 0 ? mode_idx : 0);
+    ui->motion_default_tilt->setValue(motion_param.Get("default_tilt", 90));
+    ui->motion_invert_pitch->setChecked(motion_param.Get("invert_pitch", false));
+    ui->motion_invert_yaw->setChecked(motion_param.Get("invert_yaw", false));
     ui->touch_provider->setCurrentIndex(
         ui->touch_provider->findData(QString::fromStdString(touch_engine)));
     ui->touch_from_button_checkbox->setChecked(
@@ -146,7 +330,22 @@ void ConfigureMotionTouch::SetConfiguration() {
     }
     ui->touch_from_button_map->setCurrentIndex(
         Settings::values.current_input_profile.touch_from_button_map_index);
-    ui->motion_sensitivity->setValue(motion_param.Get("sensitivity", 0.01f));
+    ui->motion_sensitivity->setValue(motion_param.Get("sensitivity", 0.075f));
+    motion_tilt_max_angle->setValue(motion_param.Get("tilt_max_angle", 90.0f));
+    ui->motion_update_period->setValue(motion_param.Get("update_period", 20));
+    ui->motion_per_frame->setChecked(motion_param.Get("per_frame", true));
+    motion_clamp_pitch->setChecked(motion_param.Get("clamp_pitch_180", true));
+    motion_auto_tilt_y->setChecked(motion_param.Get("auto_tilt_y", true));
+    motion_auto_tilt_y_invert->setChecked(motion_param.Get("auto_tilt_y_invert", false));
+    motion_auto_tilt_x->setChecked(motion_param.Get("auto_tilt_x", false));
+    motion_auto_tilt_speed->setValue(static_cast<double>(motion_param.Get("auto_tilt_speed", 1.0f)));
+
+    // Controller-to-mouse linking
+    link_cstick->setChecked(motion_param.Get("link_cstick", true));
+    link_circle_pad->setChecked(motion_param.Get("link_circle_pad", false));
+    link_dpad->setChecked(motion_param.Get("link_dpad", false));
+    link_abxy->setChecked(motion_param.Get("link_abxy", false));
+    link_speed->setValue(static_cast<double>(motion_param.Get("link_speed", 0.4f)));
 
     guid = motion_param.Get("guid", "0");
     port = motion_param.Get("port", 0);
@@ -166,13 +365,31 @@ void ConfigureMotionTouch::UpdateUiDisplay() {
     const std::string motion_engine = ui->motion_provider->currentData().toString().toStdString();
     const std::string touch_engine = ui->touch_provider->currentData().toString().toStdString();
     ui->touchpad_config_btn->setEnabled(ui->touchpad_checkbox->isChecked());
-    if (motion_engine == "motion_emu") {
-        ui->motion_sensitivity_label->setVisible(true);
-        ui->motion_sensitivity->setVisible(true);
-    } else {
-        ui->motion_sensitivity_label->setVisible(false);
-        ui->motion_sensitivity->setVisible(false);
-    }
+    // Mouse (motion_emu) specific controls
+    bool is_motion_emu = (motion_engine == "motion_emu");
+    ui->motion_mode_label->setVisible(is_motion_emu);
+    ui->motion_mode->setVisible(is_motion_emu);
+    ui->motion_tilt_label->setVisible(is_motion_emu);
+    ui->motion_default_tilt->setVisible(is_motion_emu);
+    ui->motion_invert_label->setVisible(is_motion_emu);
+    ui->motion_invert_pitch->setVisible(is_motion_emu);
+    ui->motion_invert_yaw->setVisible(is_motion_emu);
+    ui->motion_sensitivity_label->setVisible(is_motion_emu);
+    ui->motion_sensitivity->setVisible(is_motion_emu);
+    motion_tilt_max_label->setVisible(is_motion_emu);
+    motion_tilt_max_angle->setVisible(is_motion_emu);
+    ui->motion_update_label->setVisible(is_motion_emu);
+    ui->motion_update_period->setVisible(is_motion_emu);
+    ui->motion_per_frame->setVisible(is_motion_emu);
+    motion_clamp_pitch->setVisible(is_motion_emu);
+    motion_auto_tilt_y->setVisible(is_motion_emu);
+    motion_auto_tilt_y_invert->setVisible(is_motion_emu);
+    motion_auto_tilt_x->setVisible(is_motion_emu);
+    motion_auto_tilt_speed->setVisible(is_motion_emu);
+    if (link_group)
+        link_group->setVisible(is_motion_emu);
+    // Disable update_period spinbox when per-frame sync is checked
+    ui->motion_update_period->setEnabled(!ui->motion_per_frame->isChecked());
 
     if (motion_engine == "sdl") {
         ui->motion_controller_label->setVisible(true);
@@ -236,6 +453,8 @@ void ConfigureMotionTouch::ConnectEvents() {
     connect(ui->touchpad_checkbox, &QCheckBox::checkStateChanged, this,
             [this]() { UpdateUiDisplay(); });
 #endif
+
+    connect(ui->motion_per_frame, &QCheckBox::toggled, this, [this]() { UpdateUiDisplay(); });
 
     connect(ui->touchpad_config_btn, &QPushButton::clicked, this, [this]() {
         if (QMessageBox::information(this, tr("Information"),
@@ -392,6 +611,26 @@ void ConfigureMotionTouch::ApplyConfiguration() {
     motion_param.Set("engine", motion_engine);
     if (motion_engine == "motion_emu") {
         motion_param.Set("sensitivity", static_cast<float>(ui->motion_sensitivity->value()));
+        motion_param.Set("tilt_max_angle", static_cast<float>(motion_tilt_max_angle->value()));
+        std::string mode = ui->motion_mode->currentData().toString().toStdString();
+        motion_param.Set("mode", mode);
+        motion_param.Set("default_tilt", ui->motion_default_tilt->value());
+        motion_param.Set("invert_pitch", ui->motion_invert_pitch->isChecked());
+        motion_param.Set("invert_yaw", ui->motion_invert_yaw->isChecked());
+        motion_param.Set("update_period", ui->motion_update_period->value());
+        motion_param.Set("per_frame", ui->motion_per_frame->isChecked());
+        motion_param.Set("clamp_pitch_180", motion_clamp_pitch->isChecked());
+        motion_param.Set("auto_tilt_y", motion_auto_tilt_y->isChecked());
+        motion_param.Set("auto_tilt_y_invert", motion_auto_tilt_y_invert->isChecked());
+        motion_param.Set("auto_tilt_x", motion_auto_tilt_x->isChecked());
+        motion_param.Set("auto_tilt_speed", static_cast<float>(motion_auto_tilt_speed->value()));
+
+        // Controller-to-mouse linking
+        motion_param.Set("link_cstick", link_cstick->isChecked());
+        motion_param.Set("link_circle_pad", link_circle_pad->isChecked());
+        motion_param.Set("link_dpad", link_dpad->isChecked());
+        motion_param.Set("link_abxy", link_abxy->isChecked());
+        motion_param.Set("link_speed", static_cast<float>(link_speed->value()));
     } else if (motion_engine == "sdl") {
         motion_param.Set("guid", guid);
         motion_param.Set("port", port);

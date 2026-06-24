@@ -265,6 +265,7 @@ private slots:
     void OnRemoveAmiibo();
     void OnOpenCitraFolder();
     void OnToggleFilterBar();
+    void OnToggleAutoHideMenu();
     void OnDisplayTitleBars(bool);
     void InitializeHotkeys();
     void ToggleFullscreen();
@@ -334,6 +335,7 @@ private:
     void UpdateVolumeUI();
     void UpdateAPIIndicator(bool update = false);
     void UpdateStatusButtons();
+    bool eventFilter(QObject* object, QEvent* event) override;
 #ifdef __unix__
     void SetGamemodeEnabled(bool state);
 #endif
@@ -379,6 +381,11 @@ private:
     // Whether emulation is currently running in Citra.
     bool emulation_running = false;
     std::unique_ptr<EmuThread> emu_thread;
+
+    // DiySC: Auto-hide menu bar
+    QAction* action_auto_hide_menu_ = nullptr;
+    QTimer* auto_hide_menu_timer_ = nullptr;
+    bool auto_hide_menu_enabled_ = false;
     // The title of the game currently running
     QString game_title;
     // The path to the game currently running

@@ -18,6 +18,8 @@
 #include "video_core/host_shaders/vulkan_present_anaglyph_frag.h"
 #include "video_core/host_shaders/vulkan_present_frag.h"
 #include "video_core/host_shaders/vulkan_present_interlaced_frag.h"
+#include "video_core/host_shaders/vulkan_bg_fill_frag.h"
+#include "video_core/host_shaders/vulkan_bg_fill_vert.h"
 #include "video_core/host_shaders/vulkan_present_vert.h"
 
 #include "video_core/host_shaders/vulkan_cursor_frag.h"
@@ -160,6 +162,9 @@ RendererVulkan::~RendererVulkan() {
     device.destroyPipeline(cursor_pipeline);
     device.destroyShaderModule(cursor_vertex_shader);
     device.destroyShaderModule(cursor_fragment_shader);
+    device.destroyPipeline(bg_fill_pipeline);
+    device.destroyShaderModule(bg_fill_vertex_shader);
+    device.destroyShaderModule(bg_fill_fragment_shader);
 }
 
 void RendererVulkan::PrepareRendertarget() {
@@ -306,6 +311,12 @@ void RendererVulkan::CompileShaders() {
     cursor_fragment_shader =
         Compile(HostShaders::VULKAN_CURSOR_FRAG, vk::ShaderStageFlagBits::eFragment, device);
 
+    // DiySC: Background fill shaders
+    bg_fill_vertex_shader =
+        Compile(HostShaders::VULKAN_BG_FILL_VERT, vk::ShaderStageFlagBits::eVertex, device);
+    bg_fill_fragment_shader =
+        Compile(HostShaders::VULKAN_BG_FILL_FRAG, vk::ShaderStageFlagBits::eFragment, device);
+
     auto properties = instance.GetPhysicalDevice().getProperties();
     for (std::size_t i = 0; i < present_samplers.size(); i++) {
         const vk::Filter filter_mode = i == 0 ? vk::Filter::eLinear : vk::Filter::eNearest;
@@ -345,6 +356,20 @@ void RendererVulkan::BuildLayouts() {
 
     const vk::PipelineLayoutCreateInfo cursor_layout_info = {};
     cursor_pipeline_layout = instance.GetDevice().createPipelineLayoutUnique(cursor_layout_info);
+
+    // DiySC: Background fill pipeline layout
+    const vk::PushConstantRange bg_fill_push_range = {
+        .stageFlags = vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment,
+        .offset = 0,
+        .size = sizeof(BgFillUniformData),
+    };
+    const vk::PipelineLayoutCreateInfo bg_fill_layout_info = {
+        .setLayoutCount = 1,
+        .pSetLayouts = &descriptor_set_layout,
+        .pushConstantRangeCount = 1,
+        .pPushConstantRanges = &bg_fill_push_range,
+    };
+    bg_fill_pipeline_layout = instance.GetDevice().createPipelineLayoutUnique(bg_fill_layout_info);
 }
 
 void RendererVulkan::BuildPipelines() {
@@ -397,11 +422,12 @@ void RendererVulkan::BuildPipelines() {
 
     const vk::PipelineColorBlendAttachmentState colorblend_attachment = {
         .blendEnable = true,
-        .srcColorBlendFactor = vk::BlendFactor::eConstantAlpha,
-        .dstColorBlendFactor = vk::BlendFactor::eOneMinusConstantAlpha,
+        // DiySC: Use per-pixel alpha from shader for soft edges and rounded corners
+        .srcColorBlendFactor = vk::BlendFactor::eSrcAlpha,
+        .dstColorBlendFactor = vk::BlendFactor::eOneMinusSrcAlpha,
         .colorBlendOp = vk::BlendOp::eAdd,
-        .srcAlphaBlendFactor = vk::BlendFactor::eConstantAlpha,
-        .dstAlphaBlendFactor = vk::BlendFactor::eOneMinusConstantAlpha,
+        .srcAlphaBlendFactor = vk::BlendFactor::eOne,
+        .dstAlphaBlendFactor = vk::BlendFactor::eZero,
         .alphaBlendOp = vk::BlendOp::eAdd,
         .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
                           vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
@@ -423,7 +449,6 @@ void RendererVulkan::BuildPipelines() {
     };
 
     const std::array dynamic_states = {
-        vk::DynamicState::eBlendConstants,
         vk::DynamicState::eViewport,
         vk::DynamicState::eScissor,
     };
@@ -594,6 +619,53 @@ void RendererVulkan::BuildPipelines() {
             instance.GetDevice().createGraphicsPipeline({}, cursor_pipeline_info);
         ASSERT_MSG(result == vk::Result::eSuccess, "Unable to build cursor pipeline");
         cursor_pipeline = pipeline;
+    }
+
+    // DiySC: Background fill pipeline (opaque blend, no alpha)
+    {
+        const vk::PipelineColorBlendAttachmentState bg_fill_blend = {
+            .blendEnable = false,
+            .colorWriteMask = vk::ColorComponentFlagBits::eR | vk::ColorComponentFlagBits::eG |
+                              vk::ColorComponentFlagBits::eB | vk::ColorComponentFlagBits::eA,
+        };
+        const vk::PipelineColorBlendStateCreateInfo bg_fill_color_blending = {
+            .logicOpEnable = false,
+            .attachmentCount = 1,
+            .pAttachments = &bg_fill_blend,
+        };
+
+        const std::array bg_fill_shader_stages = {
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eVertex,
+                .module = bg_fill_vertex_shader,
+                .pName = "main",
+            },
+            vk::PipelineShaderStageCreateInfo{
+                .stage = vk::ShaderStageFlagBits::eFragment,
+                .module = bg_fill_fragment_shader,
+                .pName = "main",
+            },
+        };
+
+        const vk::GraphicsPipelineCreateInfo bg_pipeline_info = {
+            .stageCount = static_cast<u32>(bg_fill_shader_stages.size()),
+            .pStages = bg_fill_shader_stages.data(),
+            .pVertexInputState = &vertex_input_info,
+            .pInputAssemblyState = &input_assembly,
+            .pViewportState = &viewport_info,
+            .pRasterizationState = &raster_state,
+            .pMultisampleState = &multisampling,
+            .pDepthStencilState = &depth_info,
+            .pColorBlendState = &bg_fill_color_blending,
+            .pDynamicState = &dynamic_info,
+            .layout = *bg_fill_pipeline_layout,
+            .renderPass = main_present_window.Renderpass(),
+        };
+
+        const auto [bg_result, bg_pipeline] =
+            instance.GetDevice().createGraphicsPipeline({}, bg_pipeline_info);
+        ASSERT_MSG(bg_result == vk::Result::eSuccess, "Unable to build bg fill pipeline");
+        bg_fill_pipeline = bg_pipeline;
     }
 }
 
@@ -790,6 +862,44 @@ void RendererVulkan::DrawSingleScreen(u32 screen_id, float x, float y, float w, 
     draw_info.o_resolution = Common::MakeVec(h, w, 1.0f / h, 1.0f / w);
     draw_info.screen_id_l = screen_id;
 
+    // DiySC: Apply clip and radius
+    draw_info.screen_origin = Common::Vec2f(current_screen_x, current_screen_y);
+    draw_info.corner_radius = current_radius;
+    draw_info.bg_color =
+        Common::Vec4f(Settings::values.bg_red.GetValue() / 255.0f,
+                      Settings::values.bg_green.GetValue() / 255.0f,
+                      Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
+    draw_info.edge_blur = current_edge_blur;
+    draw_info.opacity = current_opacity;
+    // DiySC: Vignette + Overlay
+    draw_info.vignette_enable = current_vignette_enabled ? 1.0f : 0.0f;
+    draw_info.vignette_size = current_vignette_size;
+    draw_info.overlay_enable = current_overlay_enabled ? 1.0f : 0.0f;
+    draw_info.vignette_color = Common::Vec3f(current_vignette_color[0], current_vignette_color[1], current_vignette_color[2]);
+    draw_info.overlay_color = Common::Vec3f(current_overlay_color[0], current_overlay_color[1], current_overlay_color[2]);
+    // Adjust texcoords for clip (scale inward from edges)
+    if (current_clip_left > 0.0f || current_clip_right > 0.0f || current_clip_top > 0.0f ||
+        current_clip_bottom > 0.0f) {
+        float tex_w = texcoords.right - texcoords.left;
+        float tex_h = texcoords.bottom - texcoords.top;
+        float clip_l_norm = (current_clip_left / w) * tex_w;
+        float clip_r_norm = (current_clip_right / w) * tex_w;
+        float clip_t_norm = (current_clip_top / h) * tex_h;
+        float clip_b_norm = (current_clip_bottom / h) * tex_h;
+        for (auto& v : vertices) {
+            v.tex_coord.x = std::clamp(v.tex_coord.x,
+                texcoords.left + clip_l_norm, texcoords.right - clip_r_norm);
+            v.tex_coord.y = std::clamp(v.tex_coord.y,
+                texcoords.top + clip_t_norm, texcoords.bottom - clip_b_norm);
+        }
+        // Re-upload modified vertices
+        const u64 clip_size = sizeof(ScreenRectVertex) * vertices.size();
+        auto [clip_data, clip_offset, clip_inv] = vertex_buffer.Map(clip_size, 16);
+        std::memcpy(clip_data, vertices.data(), clip_size);
+        vertex_buffer.Commit(clip_size);
+        offset = clip_offset;
+    }
+
     scheduler.Record([this, offset = offset, info = draw_info](vk::CommandBuffer cmdbuf) {
         const u32 first_vertex = static_cast<u32>(offset) / sizeof(ScreenRectVertex);
         cmdbuf.pushConstants(*present_pipeline_layout,
@@ -862,6 +972,20 @@ void RendererVulkan::DrawSingleScreenStereo(u32 screen_id_l, u32 screen_id_r, fl
     draw_info.o_resolution = Common::MakeVec(h, w, 1.0f / h, 1.0f / w);
     draw_info.screen_id_l = screen_id_l;
     draw_info.screen_id_r = screen_id_r;
+    draw_info.screen_origin = Common::Vec2f(current_screen_x, current_screen_y);
+    draw_info.corner_radius = current_radius;
+    draw_info.bg_color =
+        Common::Vec4f(Settings::values.bg_red.GetValue() / 255.0f,
+                      Settings::values.bg_green.GetValue() / 255.0f,
+                      Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
+    draw_info.edge_blur = current_edge_blur;
+    draw_info.opacity = current_opacity;
+    // DiySC: Vignette + Overlay
+    draw_info.vignette_enable = current_vignette_enabled ? 1.0f : 0.0f;
+    draw_info.vignette_size = current_vignette_size;
+    draw_info.overlay_enable = current_overlay_enabled ? 1.0f : 0.0f;
+    draw_info.vignette_color = Common::Vec3f(current_vignette_color[0], current_vignette_color[1], current_vignette_color[2]);
+    draw_info.overlay_color = Common::Vec3f(current_overlay_color[0], current_overlay_color[1], current_overlay_color[2]);
 
     scheduler.Record([this, offset = offset, info = draw_info](vk::CommandBuffer cmdbuf) {
         const u32 first_vertex = static_cast<u32>(offset) / sizeof(ScreenRectVertex);
@@ -875,10 +999,9 @@ void RendererVulkan::DrawSingleScreenStereo(u32 screen_id_l, u32 screen_id_r, fl
 }
 
 void RendererVulkan::ApplySecondLayerOpacity(float alpha) {
-    scheduler.Record([alpha](vk::CommandBuffer cmdbuf) {
-        const std::array<float, 4> blend_constants = {0.0f, 0.0f, 0.0f, alpha};
-        cmdbuf.setBlendConstants(blend_constants.data());
-    });
+    // DiySC: Opacity is now handled via per-pixel alpha in the shader
+    // (draw_info.opacity), combined with SrcAlpha/OneMinusSrcAlpha blending.
+    // This function remains as a no-op for API compatibility.
 }
 
 void RendererVulkan::DrawTopScreen(const Layout::FramebufferLayout& layout,
@@ -886,11 +1009,28 @@ void RendererVulkan::DrawTopScreen(const Layout::FramebufferLayout& layout,
     if (!layout.top_screen_enabled) {
         return;
     }
+
+    // DiySC: Set current per-screen clip and radius state
+    current_clip_left = layout.top_clip_left;
+    current_clip_right = layout.top_clip_right;
+    current_clip_top = layout.top_clip_top;
+    current_clip_bottom = layout.top_clip_bottom;
+    current_radius = layout.top_radius;
+    current_edge_blur = layout.top_edge_blur;
+    current_opacity = 1.0f; // First layer is always fully opaque
+    current_vignette_enabled = layout.top_vignette_enabled;
+    current_vignette_color = layout.top_vignette_color;
+    current_vignette_size = layout.top_vignette_size;
+    current_overlay_enabled = layout.top_overlay_enabled;
+    current_overlay_color = layout.top_overlay_color;
+    current_screen_x = static_cast<float>(top_screen.left) + layout.top_offset_x;
+    current_screen_y = static_cast<float>(top_screen.top) + layout.top_offset_y;
+
     int leftside, rightside;
     leftside = Settings::values.swap_eyes_3d.GetValue() ? 1 : 0;
     rightside = Settings::values.swap_eyes_3d.GetValue() ? 0 : 1;
-    const float top_screen_left = static_cast<float>(top_screen.left);
-    const float top_screen_top = static_cast<float>(top_screen.top);
+    const float top_screen_left = static_cast<float>(top_screen.left) + layout.top_offset_x;
+    const float top_screen_top = static_cast<float>(top_screen.top) + layout.top_offset_y;
     const float top_screen_width = static_cast<float>(top_screen.GetWidth());
     const float top_screen_height = static_cast<float>(top_screen.GetHeight());
 
@@ -945,8 +1085,23 @@ void RendererVulkan::DrawBottomScreen(const Layout::FramebufferLayout& layout,
         return;
     }
 
-    const float bottom_screen_left = static_cast<float>(bottom_screen.left);
-    const float bottom_screen_top = static_cast<float>(bottom_screen.top);
+    // DiySC: Set current per-screen clip and radius state
+    current_clip_left = layout.bot_clip_left;
+    current_clip_right = layout.bot_clip_right;
+    current_clip_top = layout.bot_clip_top;
+    current_clip_bottom = layout.bot_clip_bottom;
+    current_radius = layout.bot_radius;
+    current_edge_blur = layout.bot_edge_blur;
+    current_vignette_enabled = layout.bot_vignette_enabled;
+    current_vignette_color = layout.bot_vignette_color;
+    current_vignette_size = layout.bot_vignette_size;
+    current_overlay_enabled = layout.bot_overlay_enabled;
+    current_overlay_color = layout.bot_overlay_color;
+    current_screen_x = static_cast<float>(bottom_screen.left) + layout.bot_offset_x;
+    current_screen_y = static_cast<float>(bottom_screen.top) + layout.bot_offset_y;
+
+    const float bottom_screen_left = static_cast<float>(bottom_screen.left) + layout.bot_offset_x;
+    const float bottom_screen_top = static_cast<float>(bottom_screen.top) + layout.bot_offset_y;
     const float bottom_screen_width = static_cast<float>(bottom_screen.GetWidth());
     const float bottom_screen_height = static_cast<float>(bottom_screen.GetHeight());
 
@@ -997,6 +1152,63 @@ void RendererVulkan::DrawBottomScreen(const Layout::FramebufferLayout& layout,
     }
 }
 
+void RendererVulkan::DrawBackgroundFill(Frame* frame, const Layout::FramebufferLayout& layout, bool flipped) {
+    if (!layout.bg_blur_enabled) return;
+
+    const u32 screen_id = layout.bg_blur_is_bottom ? 2 : 0;
+    const ScreenInfo& screen_info = screen_infos[screen_id];
+
+    // Compute centered rectangle with correct 3DS aspect ratio
+    // Top screen: 400:240 = 5:3, Bottom screen: 320:240 = 4:3
+    // Scale enlarges the quad (zoom), naturally eliminating black bars when > 1.0
+    f32 src_ar = layout.bg_blur_is_bottom ? (4.0f / 3.0f) : (5.0f / 3.0f);
+    f32 window_ar = (f32)layout.width / (f32)layout.height;
+
+    f32 draw_w, draw_h;
+    if (window_ar > src_ar) {
+        draw_h = (f32)layout.height * layout.bg_blur_scale;
+        draw_w = draw_h * src_ar;
+    } else {
+        draw_w = (f32)layout.width * layout.bg_blur_scale;
+        draw_h = draw_w / src_ar;
+    }
+
+    f32 draw_x = ((f32)layout.width - draw_w) / 2.0f;
+    f32 draw_y = ((f32)layout.height - draw_h) / 2.0f;
+
+    struct BgVertex { Common::Vec2f position; Common::Vec2f tex_coord; };
+    BgVertex vertices[4] = {
+        {{draw_x, draw_y}, {0.0f, 0.0f}},
+        {{draw_x + draw_w, draw_y}, {1.0f, 0.0f}},
+        {{draw_x, draw_y + draw_h}, {0.0f, 1.0f}},
+        {{draw_x + draw_w, draw_y + draw_h}, {1.0f, 1.0f}},
+    };
+
+    auto [data, offset, invalidate] = vertex_buffer.Map(sizeof(vertices), 16);
+    std::memcpy(data, vertices, sizeof(vertices));
+    vertex_buffer.Commit(sizeof(vertices));
+
+    BgFillUniformData bg_info;
+    bg_info.modelview = MakeOrthographicMatrix(layout.width, layout.height);
+    bg_info.tex_size = Common::Vec2f((f32)screen_info.texture.width, (f32)screen_info.texture.height);
+    bg_info.blur_sigma = layout.bg_blur_sigma;
+    bg_info.scale = layout.bg_blur_scale;
+    bg_info.darken = layout.bg_blur_darken;
+    bg_info.max_radius = layout.bg_blur_max_radius;
+    bg_info.direction = 1; // vertical+display (single-pass for Vulkan until FBO support)
+
+    // TODO: bind bg_fill pipeline and descriptor set, push constants, draw
+    // For now, use the present pipeline layout with bg_fill shaders via a separate pipeline
+    scheduler.Record([this, offset = offset, info = bg_info, tex = screen_info.image_view](vk::CommandBuffer cmdbuf) {
+        const u32 first_vertex = static_cast<u32>(offset) / sizeof(BgVertex);
+        cmdbuf.pushConstants(*bg_fill_pipeline_layout,
+                             vk::ShaderStageFlagBits::eFragment | vk::ShaderStageFlagBits::eVertex,
+                             0, sizeof(info), &info);
+        cmdbuf.bindVertexBuffers(0, vertex_buffer.Handle(), {0});
+        cmdbuf.draw(4, 1, first_vertex, 0);
+    });
+}
+
 void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& layout,
                                  bool flipped) {
     if (settings.bg_color_update_requested.exchange(false)) {
@@ -1010,6 +1222,11 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
 
     PrepareDraw(frame, layout);
 
+    // DiySC: Draw background blur fill
+    if (layout.bg_blur_enabled) {
+        DrawBackgroundFill(frame, layout, flipped);
+    }
+
     const auto& top_screen = layout.top_screen;
     const auto& bottom_screen = layout.bottom_screen;
     draw_info.modelview = MakeOrthographicMatrix(layout.width, layout.height);
@@ -1022,6 +1239,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     if (!Settings::values.swap_screen.GetValue()) {
         DrawTopScreen(layout, top_screen);
         draw_info.layer = 0;
+        current_opacity = layout.bottom_opacity;
         if (layout.bottom_opacity < 1) {
             ApplySecondLayerOpacity(layout.bottom_opacity);
         }
@@ -1029,6 +1247,7 @@ void RendererVulkan::DrawScreens(Frame* frame, const Layout::FramebufferLayout& 
     } else {
         DrawBottomScreen(layout, bottom_screen);
         draw_info.layer = 0;
+        current_opacity = layout.top_opacity;
         if (layout.top_opacity < 1) {
             ApplySecondLayerOpacity(layout.top_opacity);
         }

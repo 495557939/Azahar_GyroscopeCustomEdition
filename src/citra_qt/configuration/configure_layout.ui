@@ -124,6 +124,11 @@
                  <string>Custom Layout</string>
                 </property>
                </item>
+               <item>
+                <property name="text">
+                 <string>Custom Layout (Percent)</string>
+                </property>
+               </item>
               </widget>
              </item>
             </layout>
@@ -580,6 +585,424 @@
          </layout>
         </widget>
        </item>
+     <item>
+      <widget class="QGroupBox" name="custom_pct_layout_group">
+       <property name="title">
+        <string>Custom Layout (Percent) - DiySC</string>
+       </property>
+       <layout class="QVBoxLayout" name="verticalLayout_pct">
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_pct_aspect">
+          <item>
+           <widget class="QCheckBox" name="pct_internal_16x9">
+            <property name="text">
+             <string>Lock to 16:9 canvas (letterbox)</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item>
+           <widget class="QCheckBox" name="pct_internal_4x3">
+            <property name="text">
+             <string>Lock to 4:3 canvas (letterbox)</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="horizontalLayout_pct_screens">
+          <item>
+           <widget class="QGroupBox" name="gb_pct_top_screen">
+            <property name="title">
+             <string>Top Screen</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_pct_top">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lb_pct_top_x">
+               <property name="text">
+                <string>X (0-100%, center anchor)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_x">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>100</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>50</number></property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="lb_pct_top_y">
+               <property name="text">
+                <string>Y (0-100%, center anchor)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_y">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>100</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>50</number></property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="lb_pct_top_width">
+               <property name="text"><string>Width (%)</string></property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_width">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>1000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="lb_pct_top_height">
+               <property name="text"><string>Height (%)</string></property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_height">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>1000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+             <item row="4" column="0">
+              <widget class="QLabel" name="lb_pct_top_stretch_x">
+               <property name="text"><string>Stretch X (%)</string></property>
+              </widget>
+             </item>
+             <item row="4" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_stretch_x">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0.00</number></property>
+               <property name="maximum"><number>50000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+             <item row="5" column="0">
+              <widget class="QLabel" name="lb_pct_top_stretch_y">
+               <property name="text"><string>Stretch Y (%)</string></property>
+              </widget>
+             </item>
+             <item row="5" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_top_stretch_y">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0.00</number></property>
+               <property name="maximum"><number>50000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item>
+           <widget class="QGroupBox" name="gb_pct_bottom_screen">
+            <property name="title">
+             <string>Bottom Screen</string>
+            </property>
+            <layout class="QGridLayout" name="gridLayout_pct_bottom">
+             <item row="0" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_x">
+               <property name="text">
+                <string>X (0-100%, center anchor)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_x">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>100</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>88</number></property>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_y">
+               <property name="text">
+                <string>Y (0-100%, center anchor)</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_y">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>100</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>85</number></property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_width">
+               <property name="text"><string>Width (%)</string></property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_width">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>1000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>27</number></property>
+              </widget>
+             </item>
+             <item row="3" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_height">
+               <property name="text"><string>Height (%)</string></property>
+              </widget>
+             </item>
+             <item row="3" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_height">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>1000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>27</number></property>
+              </widget>
+             </item>
+             <item row="4" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_stretch_x">
+               <property name="text"><string>Stretch X (%)</string></property>
+              </widget>
+             </item>
+             <item row="4" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_stretch_x">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0</number></property>
+               <property name="maximum"><number>50000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>80</number></property>
+              </widget>
+             </item>
+             <item row="5" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_stretch_y">
+               <property name="text"><string>Stretch Y (%)</string></property>
+              </widget>
+             </item>
+             <item row="5" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_stretch_y">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0.00</number></property>
+               <property name="maximum"><number>50000</number></property>
+               <property name="singleStep"><number>1</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+             <item row="6" column="0">
+              <widget class="QLabel" name="lb_pct_bottom_opacity">
+               <property name="text"><string>Opacity</string></property>
+              </widget>
+             </item>
+             <item row="6" column="1">
+              <widget class="QDoubleSpinBox" name="custom_pct_bottom_opacity">
+               <property name="suffix"><string>%</string></property>
+                             <property name="decimals"><number>2</number></property>
+               <property name="minimum"><number>0.00</number></property>
+               <property name="maximum"><number>100</number></property>
+               <property name="value"><number>100</number></property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </item>
+
+     <!-- DiySC: Background blur fill -->
+     <item>
+      <widget class="QGroupBox" name="custom_pct_bg_blur_group">
+       <property name="title">
+        <string>Background Blur Fill</string>
+       </property>
+       <property name="toolTip">
+        <string>Like video pillarboxing on phones — enlarges the game screen as a blurred background to fill black bars, making the viewport feel fuller.</string>
+       </property>
+       <layout class="QVBoxLayout" name="verticalLayout_bg_blur">
+        <item>
+         <widget class="QLabel" name="lb_bg_blur_desc">
+          <property name="text">
+           <string>Fill blank areas behind screens with an enlarged, blurred copy of the game image. The source screen (top or bottom) is chosen below — bottom overrides top if both are checked.</string>
+          </property>
+          <property name="wordWrap">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <layout class="QGridLayout" name="gridLayout_bg_blur">
+          <item row="0" column="0">
+           <widget class="QCheckBox" name="bg_blur_top_enable">
+            <property name="text">
+             <string>Use Top Screen as blur source</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QCheckBox" name="bg_blur_bottom_enable">
+            <property name="text">
+             <string>Use Bottom Screen as blur source (overrides Top)</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="lb_bg_blur_darken">
+            <property name="text">
+             <string>Darken</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QDoubleSpinBox" name="bg_blur_darken">
+            <property name="suffix">
+             <string>%</string>
+            </property>
+            <property name="decimals">
+             <number>1</number>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>100</number>
+            </property>
+            <property name="singleStep">
+             <number>1</number>
+            </property>
+            <property name="value">
+             <number>50</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="lb_bg_blur_size">
+            <property name="text">
+             <string>Blur Amount</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QDoubleSpinBox" name="bg_blur_size">
+            <property name="suffix">
+             <string>%</string>
+            </property>
+            <property name="decimals">
+             <number>1</number>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>100</number>
+            </property>
+            <property name="singleStep">
+             <number>1</number>
+            </property>
+            <property name="value">
+             <number>10</number>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="lb_bg_blur_scale">
+            <property name="text">
+             <string>Scale</string>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QDoubleSpinBox" name="bg_blur_scale">
+            <property name="suffix">
+             <string>%</string>
+            </property>
+            <property name="decimals">
+             <number>1</number>
+            </property>
+            <property name="minimum">
+             <number>100</number>
+            </property>
+            <property name="maximum">
+             <number>655</number>
+            </property>
+            <property name="singleStep">
+             <number>10</number>
+            </property>
+            <property name="value">
+             <number>300</number>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0">
+           <widget class="QLabel" name="lb_bg_blur_quality">
+            <property name="text">
+             <string>Quality</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QComboBox" name="bg_blur_quality">
+            <property name="currentIndex">
+             <number>1</number>
+            </property>
+            <item>
+             <property name="text">
+              <string>Low</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Medium</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>High</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Ultra</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+         </layout>
+        </item>
+       </layout>
+      </widget>
+     </item>
+
        <item>
         <widget class="QGroupBox" name="single_screen_layout_config_group">
          <property name="minimumSize">

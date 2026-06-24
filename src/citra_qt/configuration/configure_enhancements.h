@@ -6,6 +6,9 @@
 
 #include <memory>
 #include <QWidget>
+#include <QComboBox>
+#include <QLabel>
+#include <array>
 #include "common/common_types.h"
 
 namespace Settings {
@@ -36,6 +39,7 @@ public:
 private:
     void updateShaders(Settings::StereoRenderOption stereo_option);
     void updateTextureFilter(int index);
+    void UpdateFilterSlotVisibility();
 
     std::unique_ptr<Ui::ConfigureEnhancements> ui;
     ConfigurationShared::CheckState linear_filter;
@@ -46,4 +50,8 @@ private:
     ConfigurationShared::CheckState async_custom_loading;
     ConfigurationShared::CheckState disable_right_eye_render;
     QColor bg_color;
+
+    // Multi-filter slots 2-10 (slot 1 is ui->shader_combobox)
+    std::array<QComboBox*, 9> filter_slots{};
+    std::array<QLabel*, 9> filter_labels{};
 };

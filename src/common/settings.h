@@ -47,6 +47,7 @@ enum class LayoutOption : u32 { // Shouldn't these have set numbers to prevent l
 #endif
     HybridScreen,
     CustomLayout,
+    CustomLayoutPercent,
 };
 
 /** Defines the layout option for mobile portrait */
@@ -445,9 +446,11 @@ protected:
     Type custom{};         ///< The custom value of the setting
 };
 
+static constexpr int MAX_BINDINGS_PER_BUTTON = 10;
+
 struct InputProfile {
     std::string name;
-    std::array<std::string, NativeButton::NumButtons> buttons;
+    std::array<std::vector<std::string>, NativeButton::NumButtons> buttons;
     std::array<std::string, NativeAnalog::NumAnalogs> analogs;
     std::string motion_device;
     std::string touch_device;
@@ -458,6 +461,9 @@ struct InputProfile {
     std::string udp_input_address;
     u16 udp_input_port;
     u8 udp_pad_index;
+    // Per-profile touch screen coordinate bindings.
+    // touch_points[point][slot] = serialized ParamPackage with engine/key + x% + y%.
+    std::vector<std::vector<std::string>> touch_points;
 };
 
 struct TouchFromButtonMap {
@@ -476,6 +482,7 @@ struct Values {
     std::vector<InputProfile> input_profiles; ///< The list of input profiles
     std::vector<TouchFromButtonMap> touch_from_button_maps;
     Setting<bool> use_artic_base_controller{false, Keys::use_artic_base_controller};
+    Setting<bool> use_adaptive_controller_mapping{true, Keys::use_adaptive_controller_mapping};
 
     SwitchableSetting<bool> enable_gamemode{true, Keys::enable_gamemode};
 
@@ -543,18 +550,19 @@ struct Values {
     SwitchableSetting<bool> use_display_refresh_rate_detection{
         true, Keys::use_display_refresh_rate_detection};
     Setting<bool> use_shader_jit{true, Keys::use_shader_jit};
-    SwitchableSetting<u32, true> resolution_factor{1, 0, 10, Keys::resolution_factor};
+    // resolution_factor: 0=auto-window, 1..10=fixed, 11..17=auto-Nx window (see video_core/renderer_base.h)
+    SwitchableSetting<u32, true> resolution_factor{13, 0, 17, Keys::resolution_factor};
     SwitchableSetting<bool> use_integer_scaling{false, Keys::use_integer_scaling};
     SwitchableSetting<double, true> frame_limit{100, 0, 1000, Keys::frame_limit};
     SwitchableSetting<double, true> turbo_limit{200, 0, 1000, Keys::turbo_limit};
-    SwitchableSetting<TextureFilter> texture_filter{TextureFilter::NoFilter, Keys::texture_filter};
+    SwitchableSetting<TextureFilter> texture_filter{TextureFilter::xBRZ, Keys::texture_filter};
     SwitchableSetting<TextureSampling> texture_sampling{TextureSampling::GameControlled,
                                                         Keys::texture_sampling};
     SwitchableSetting<u16, true> delay_game_render_thread_us{0, 0, 65000,
                                                              Keys::delay_game_render_thread_us};
     SwitchableSetting<bool> simulate_3ds_gpu_timings{true, Keys::simulate_3ds_gpu_timings};
 
-    SwitchableSetting<LayoutOption> layout_option{LayoutOption::Default, Keys::layout_option};
+    SwitchableSetting<LayoutOption> layout_option{LayoutOption::CustomLayoutPercent, Keys::layout_option};
     SwitchableSetting<bool> swap_screen{false, Keys::swap_screen};
     SwitchableSetting<bool> upright_screen{false, Keys::upright_screen};
     SwitchableSetting<SecondaryDisplayLayout> secondary_display_layout{
@@ -565,7 +573,7 @@ struct Values {
 #ifndef ANDROID
          LayoutOption::SeparateWindows,
 #endif
-         LayoutOption::HybridScreen, LayoutOption::CustomLayout},
+         LayoutOption::HybridScreen, LayoutOption::CustomLayout, LayoutOption::CustomLayoutPercent},
         Keys::layouts_to_cycle};
     SwitchableSetting<float, true> large_screen_proportion{4.f, 1.f, 16.f,
                                                            Keys::large_screen_proportion};
@@ -581,6 +589,82 @@ struct Values {
     Setting<u16> custom_bottom_width{640, Keys::custom_bottom_width};
     Setting<u16> custom_bottom_height{480, Keys::custom_bottom_height};
     Setting<u16> custom_second_layer_opacity{100, Keys::custom_second_layer_opacity};
+
+    // DiySC: Percentage-based custom layout settings
+    Setting<bool> custom_percent_layout{false, Keys::custom_percent_layout};
+    Setting<bool> custom_pct_internal_16x9{true, Keys::custom_pct_internal_16x9};
+    Setting<bool> custom_pct_internal_4x3{false, Keys::custom_pct_internal_4x3};
+
+    // Top screen percentage settings (0-10000 = 0%-100% with 2 decimal places)
+    Setting<u16> custom_pct_top_x{5000, Keys::custom_pct_top_x};
+    Setting<u16> custom_pct_top_y{5000, Keys::custom_pct_top_y};
+    Setting<u16> custom_pct_top_width{10000, Keys::custom_pct_top_width};
+    Setting<u16> custom_pct_top_height{10000, Keys::custom_pct_top_height};
+    Setting<u16> custom_pct_top_stretch_x{10000, Keys::custom_pct_top_stretch_x};
+    Setting<u16> custom_pct_top_stretch_y{10000, Keys::custom_pct_top_stretch_y};
+    Setting<u16> custom_pct_top_clip_x{0, Keys::custom_pct_top_clip_x};
+    Setting<u16> custom_pct_top_clip_y{0, Keys::custom_pct_top_clip_y};
+    Setting<u16> custom_pct_top_radius{0, Keys::custom_pct_top_radius};
+    Setting<u16> custom_pct_top_edge_blur{0, Keys::custom_pct_top_edge_blur};
+
+    // Bottom screen percentage settings
+    Setting<u16> custom_pct_bottom_x{8800, Keys::custom_pct_bottom_x};
+    Setting<u16> custom_pct_bottom_y{8500, Keys::custom_pct_bottom_y};
+    Setting<u16> custom_pct_bottom_width{2700, Keys::custom_pct_bottom_width};
+    Setting<u16> custom_pct_bottom_height{2700, Keys::custom_pct_bottom_height};
+    Setting<u16> custom_pct_bottom_stretch_x{8000, Keys::custom_pct_bottom_stretch_x};
+    Setting<u16> custom_pct_bottom_stretch_y{10000, Keys::custom_pct_bottom_stretch_y};
+    Setting<u16> custom_pct_bottom_clip_x{0, Keys::custom_pct_bottom_clip_x};
+    Setting<u16> custom_pct_bottom_clip_y{0, Keys::custom_pct_bottom_clip_y};
+    Setting<u16> custom_pct_bottom_radius{1000, Keys::custom_pct_bottom_radius};
+    Setting<u16> custom_pct_bottom_edge_blur{200, Keys::custom_pct_bottom_edge_blur};
+    Setting<u16> custom_pct_bottom_opacity{100, Keys::custom_pct_bottom_opacity};
+
+    // DiySC: Background blur fill
+    Setting<bool> custom_pct_bg_blur_top_enable{true, Keys::custom_pct_bg_blur_top_enable};
+    Setting<bool> custom_pct_bg_blur_bottom_enable{false, Keys::custom_pct_bg_blur_bottom_enable};
+    Setting<u16> custom_pct_bg_blur_darken{0, Keys::custom_pct_bg_blur_darken};
+    Setting<u16> custom_pct_bg_blur_size{3000, Keys::custom_pct_bg_blur_size};   // default 30%
+    Setting<u16> custom_pct_bg_blur_scale{18000, Keys::custom_pct_bg_blur_scale};
+    Setting<u8> custom_pct_bg_blur_quality{1, Keys::custom_pct_bg_blur_quality}; // 0=Low 1=Med 2=High 3=Ultra
+
+    // DiySC: Background vignette (global)
+    Setting<bool> custom_pct_bg_vignette_enable{false, Keys::custom_pct_bg_vignette_enable};
+    Setting<u16> custom_pct_bg_vignette_color_r{0, Keys::custom_pct_bg_vignette_color_r};
+    Setting<u16> custom_pct_bg_vignette_color_g{0, Keys::custom_pct_bg_vignette_color_g};
+    Setting<u16> custom_pct_bg_vignette_color_b{0, Keys::custom_pct_bg_vignette_color_b};
+    Setting<u16> custom_pct_bg_vignette_size{5000, Keys::custom_pct_bg_vignette_size};
+
+    // DiySC: Per-screen vignette
+    Setting<bool> custom_pct_top_vignette_enable{false, Keys::custom_pct_top_vignette_enable};
+    Setting<u16> custom_pct_top_vignette_color_r{0, Keys::custom_pct_top_vignette_color_r};
+    Setting<u16> custom_pct_top_vignette_color_g{0, Keys::custom_pct_top_vignette_color_g};
+    Setting<u16> custom_pct_top_vignette_color_b{0, Keys::custom_pct_top_vignette_color_b};
+    Setting<u16> custom_pct_top_vignette_size{5000, Keys::custom_pct_top_vignette_size};
+    Setting<bool> custom_pct_bot_vignette_enable{false, Keys::custom_pct_bot_vignette_enable};
+    Setting<u16> custom_pct_bot_vignette_color_r{0, Keys::custom_pct_bot_vignette_color_r};
+    Setting<u16> custom_pct_bot_vignette_color_g{0, Keys::custom_pct_bot_vignette_color_g};
+    Setting<u16> custom_pct_bot_vignette_color_b{0, Keys::custom_pct_bot_vignette_color_b};
+    Setting<u16> custom_pct_bot_vignette_size{5000, Keys::custom_pct_bot_vignette_size};
+
+    // DiySC: Background overlay color (global + per-screen)
+    Setting<bool> custom_pct_bg_overlay_enable{false, Keys::custom_pct_bg_overlay_enable};
+    Setting<u16> custom_pct_bg_overlay_color_r{5000, Keys::custom_pct_bg_overlay_color_r};
+    Setting<u16> custom_pct_bg_overlay_color_g{5000, Keys::custom_pct_bg_overlay_color_g};
+    Setting<u16> custom_pct_bg_overlay_color_b{5000, Keys::custom_pct_bg_overlay_color_b};
+    Setting<bool> custom_pct_top_overlay_enable{false, Keys::custom_pct_top_overlay_enable};
+    Setting<u16> custom_pct_top_overlay_color_r{5000, Keys::custom_pct_top_overlay_color_r};
+    Setting<u16> custom_pct_top_overlay_color_g{5000, Keys::custom_pct_top_overlay_color_g};
+    Setting<u16> custom_pct_top_overlay_color_b{5000, Keys::custom_pct_top_overlay_color_b};
+    Setting<bool> custom_pct_bot_overlay_enable{false, Keys::custom_pct_bot_overlay_enable};
+    Setting<u16> custom_pct_bot_overlay_color_r{5000, Keys::custom_pct_bot_overlay_color_r};
+    Setting<u16> custom_pct_bot_overlay_color_g{5000, Keys::custom_pct_bot_overlay_color_g};
+    Setting<u16> custom_pct_bot_overlay_color_b{5000, Keys::custom_pct_bot_overlay_color_b};
+
+    // Letterbox color for internal aspect ratio
+    Setting<float> custom_pct_letterbox_color_r{0.f, Keys::custom_pct_letterbox_color_r};
+    Setting<float> custom_pct_letterbox_color_g{0.f, Keys::custom_pct_letterbox_color_g};
+    Setting<float> custom_pct_letterbox_color_b{0.f, Keys::custom_pct_letterbox_color_b};
     SwitchableSetting<AspectRatio> aspect_ratio{AspectRatio::Default, Keys::aspect_ratio};
     SwitchableSetting<bool> screen_top_stretch{false, Keys::screen_top_stretch};
     Setting<u16> screen_top_leftright_padding{0, Keys::screen_top_leftright_padding};
@@ -618,7 +702,17 @@ struct Values {
     Setting<s32> cardboard_y_shift{0, Keys::cardboard_y_shift};
 
     SwitchableSetting<bool> filter_mode{true, Keys::filter_mode};
-    SwitchableSetting<std::string> pp_shader_name{"None (builtin)", Keys::pp_shader_name};
+    SwitchableSetting<std::string> pp_shader_name{"AA-2D3D", Keys::pp_shader_name};
+    // Multi-filter stacking: additional post-processing slots (2-10)
+    Setting<std::string> pp_shader_name_2{"None (builtin)", Keys::pp_shader_name_2};
+    Setting<std::string> pp_shader_name_3{"None (builtin)", Keys::pp_shader_name_3};
+    Setting<std::string> pp_shader_name_4{"None (builtin)", Keys::pp_shader_name_4};
+    Setting<std::string> pp_shader_name_5{"None (builtin)", Keys::pp_shader_name_5};
+    Setting<std::string> pp_shader_name_6{"None (builtin)", Keys::pp_shader_name_6};
+    Setting<std::string> pp_shader_name_7{"None (builtin)", Keys::pp_shader_name_7};
+    Setting<std::string> pp_shader_name_8{"None (builtin)", Keys::pp_shader_name_8};
+    Setting<std::string> pp_shader_name_9{"None (builtin)", Keys::pp_shader_name_9};
+    Setting<std::string> pp_shader_name_10{"None (builtin)", Keys::pp_shader_name_10};
     SwitchableSetting<std::string> anaglyph_shader_name{"Dubois (builtin)",
                                                         Keys::anaglyph_shader_name};
 

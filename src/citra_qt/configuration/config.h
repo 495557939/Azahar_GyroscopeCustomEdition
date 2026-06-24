@@ -24,7 +24,7 @@ public:
     void Reload();
     void Save();
 
-    static const std::array<int, Settings::NativeButton::NumButtons> default_buttons;
+    static const std::array<std::vector<std::string>, Settings::NativeButton::NumButtons> default_buttons;
     static const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> default_analogs;
     static const std::vector<UISettings::Shortcut> default_hotkeys;
 

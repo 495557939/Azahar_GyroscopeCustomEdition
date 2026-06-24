@@ -90,6 +90,8 @@ void ConfigureGeneral::SetConfiguration() {
         ui->toggle_background_mute->setChecked(
             UISettings::values.mute_when_in_background.GetValue());
         ui->toggle_hide_mouse->setChecked(UISettings::values.hide_mouse.GetValue());
+        ui->toggle_auto_fullscreen->setChecked(
+            UISettings::values.auto_fullscreen_on_game_start.GetValue());
 #ifdef ENABLE_QT_UPDATE_CHECKER
         ui->toggle_update_checker->setChecked(
             UISettings::values.check_for_update_on_start.GetValue());
@@ -142,7 +144,7 @@ void ConfigureGeneral::SetConfiguration() {
                                                  ConfigurationShared::USE_GLOBAL_INDEX);
     std::string screenshot_path = UISettings::values.screenshot_path.GetValue();
     if (screenshot_path.empty()) {
-        screenshot_path = FileUtil::GetUserPath(FileUtil::UserPath::UserDir) + "screenshots/";
+        screenshot_path = "./UserProfile/screenshots/";
         FileUtil::CreateFullPath(screenshot_path);
         UISettings::values.screenshot_path = screenshot_path;
     }
@@ -182,6 +184,7 @@ void ConfigureGeneral::ApplyConfiguration() {
         UISettings::values.pause_when_in_background = ui->toggle_background_pause->isChecked();
         UISettings::values.mute_when_in_background = ui->toggle_background_mute->isChecked();
         UISettings::values.hide_mouse = ui->toggle_hide_mouse->isChecked();
+        UISettings::values.auto_fullscreen_on_game_start = ui->toggle_auto_fullscreen->isChecked();
 #ifdef ENABLE_QT_UPDATE_CHECKER
         UISettings::values.check_for_update_on_start = ui->toggle_update_checker->isChecked();
         UISettings::values.update_check_channel = ui->update_channel_combobox->currentIndex();

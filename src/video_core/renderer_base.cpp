@@ -25,6 +25,16 @@ u32 RendererBase::GetResolutionScaleFactor() {
     }
 
     const u32 scale_factor = Settings::values.resolution_factor.GetValue();
+    if (scale_factor >= AUTO_WINDOW_SCALED_MIN) {
+        // 11..17 = auto-scale to window * (1 - 0.1*(idx-10))  (0.9..0.25)
+        // We round to the nearest integer that doesn't overshoot the window.
+        const float scale = GetAutoWindowScaledFactor(scale_factor);
+        const u32 window_ratio = render_window.GetFramebufferLayout().GetScalingRatio();
+        if (window_ratio == 0)
+            return 1;
+        const u32 scaled = static_cast<u32>(static_cast<float>(window_ratio) * scale);
+        return scaled == 0 ? 1 : scaled;
+    }
     return scale_factor != 0 ? scale_factor
                              : render_window.GetFramebufferLayout().GetScalingRatio();
 }

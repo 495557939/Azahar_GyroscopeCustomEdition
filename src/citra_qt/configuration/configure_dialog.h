@@ -4,6 +4,7 @@
 
 #pragma once
 
+#include <functional>
 #include <memory>
 #include <span>
 #include <QDialog>
@@ -44,6 +45,11 @@ public:
 
     void ApplyConfiguration();
 
+    /// Set a callback that is invoked after ApplyConfiguration to persist data to disk.
+    void SetSaveCallback(std::function<void()> callback) {
+        save_callback = std::move(callback);
+    }
+
 private slots:
     void OnLanguageChanged(const QString& locale);
 
@@ -74,4 +80,6 @@ private:
     std::unique_ptr<ConfigureStorage> storage_tab;
     std::unique_ptr<ConfigureWeb> web_tab;
     std::unique_ptr<ConfigureUi> ui_tab;
+
+    std::function<void()> save_callback;
 };

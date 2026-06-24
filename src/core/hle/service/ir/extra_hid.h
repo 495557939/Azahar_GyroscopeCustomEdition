@@ -7,6 +7,7 @@
 #include <array>
 #include <atomic>
 #include <span>
+#include <vector>
 #include <boost/serialization/array.hpp>
 #include "common/bit_field.h"
 #include "common/swap.h"
@@ -73,8 +74,8 @@ private:
     u8 hid_period;
     Core::TimingEventType* hid_polling_callback_id;
     std::array<u8, 0x40> calibration_data;
-    std::unique_ptr<Input::ButtonDevice> zl;
-    std::unique_ptr<Input::ButtonDevice> zr;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> zl;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> zr;
     std::unique_ptr<Input::AnalogDevice> c_stick;
     std::atomic<bool> is_device_reload_pending;
 

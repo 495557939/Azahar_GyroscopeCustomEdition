@@ -44,11 +44,19 @@ constexpr char dolphin_shader_header[] = R"(
 layout (location = 0) out float4 color;
 // Input coordinates
 layout (location = 0) in float2 frag_tex_coord;
+// Screen position (for corner radius SDF)
+layout (location = 1) in float2 frag_position;
 // Resolution
 uniform float4 i_resolution;
 uniform float4 o_resolution;
 // Layer
 uniform int layer;
+// Corner radius uniforms
+uniform vec2 u_screen_origin;
+uniform float u_corner_radius;
+uniform vec4 u_bg_color;
+uniform float u_edge_blur;
+uniform float u_opacity;
 
 uniform sampler2D color_texture;
 uniform sampler2D color_texture_r;
@@ -121,13 +129,32 @@ float2 GetCoordinates()
 
 void SetOutput(float4 color_in)
 {
-    color = color_in;
+    // Apply rounded corner SDF on top of the processed color.
+    // Only set alpha; GPU blending (GL_SRC_ALPHA / GL_ONE_MINUS_SRC_ALPHA)
+    // handles the background mix — do NOT pre-multiply here to avoid
+    // double-blending with the background.
+    vec2 screen_size = vec2(o_resolution.y, o_resolution.x);
+    vec2 pos = frag_position - u_screen_origin;
+    vec2 half_size = screen_size * 0.5;
+    vec2 centered = pos - half_size;
+
+    float r = max(u_corner_radius, 0.001);
+    // sdRoundedBox: q = abs(centered) - half_size + r
+    vec2 q = abs(centered) - half_size + r;
+    float sdf = length(max(q, 0.0)) + min(max(q.x, q.y), 0.0) - r;
+    float blur_width = max(u_edge_blur, 1.5);
+    float shape_alpha = 1.0 - smoothstep(-blur_width, 1.0, sdf);
+    float final_alpha = shape_alpha * u_opacity;
+
+    color = float4(color_in.rgb, final_alpha);
 }
 
 )";
 
 std::vector<std::string> GetPostProcessingShaderList(bool anaglyph) {
-    std::string shader_dir = FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir);
+    // Filter shaders live in ./shadersGlsl/ (alongside the exe),
+    // separate from the GPU shader cache in UserProfile/shaders/
+    std::string shader_dir = FileUtil::GetExeDirectory() + DIR_SEP "shadersGlsl" + DIR_SEP;
     std::vector<std::string> shader_names;
 
     if (!FileUtil::IsDirectory(shader_dir)) {
@@ -165,7 +192,7 @@ std::vector<std::string> GetPostProcessingShaderList(bool anaglyph) {
 }
 
 std::string GetPostProcessingShaderCode(bool anaglyph, std::string_view shader) {
-    std::string shader_dir = FileUtil::GetUserPath(FileUtil::UserPath::ShaderDir);
+    std::string shader_dir = FileUtil::GetExeDirectory() + DIR_SEP "shadersGlsl" + DIR_SEP;
     std::string shader_path;
 
     if (anaglyph) {

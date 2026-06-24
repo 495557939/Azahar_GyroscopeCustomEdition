@@ -11,6 +11,7 @@
 #include <string>
 #include <QKeySequence>
 #include <QWidget>
+#include <QGroupBox>
 #include "common/param_package.h"
 #include "common/settings.h"
 #include "input_common/main.h"
@@ -59,18 +60,59 @@ private:
     /// This will be the the setting function when an input is awaiting configuration.
     std::optional<std::function<void(const Common::ParamPackage&)>> input_setter;
 
-    std::array<Common::ParamPackage, Settings::NativeButton::NumButtons> buttons_param;
+    static constexpr int MAX_BINDINGS_PER_BUTTON = 10;
+
+    std::array<std::vector<Common::ParamPackage>, Settings::NativeButton::NumButtons> buttons_param;
     std::array<Common::ParamPackage, Settings::NativeAnalog::NumAnalogs> analogs_param;
 
     static constexpr int ANALOG_SUB_BUTTONS_NUM = 9;
 
-    /// Each button input is represented by a QPushButton.
-    std::array<QPushButton*, Settings::NativeButton::NumButtons> button_map;
+    /// Each button input is represented by multiple QPushButtons (multi-key mapping).
+    std::array<std::vector<QPushButton*>, Settings::NativeButton::NumButtons> button_map;
+    /// Layout containers holding the horizontal button rows.
+    std::array<QWidget*, Settings::NativeButton::NumButtons> button_containers{};
+    /// Parent layouts for deferred container insertion (avoid spacing when hidden).
+    std::array<QLayout*, Settings::NativeButton::NumButtons> button_container_layouts{};
+    std::array<int, Settings::NativeButton::NumButtons> button_container_positions{};
 
     /// A group of five QPushButtons represent one analog input. The buttons each represent up,
-    /// down, left, right, and modifier, respectively.
-    std::array<std::array<QPushButton*, ANALOG_SUB_BUTTONS_NUM>, Settings::NativeAnalog::NumAnalogs>
+    /// down, left, right, and modifier, respectively. Each direction supports multi-key binding
+    /// via a vector of QPushButtons (primary + extras).
+    std::array<std::array<std::vector<QPushButton*>, ANALOG_SUB_BUTTONS_NUM>,
+               Settings::NativeAnalog::NumAnalogs>
         analog_map_buttons;
+    /// Layout containers for analog direction extra binding rows.
+    std::array<std::array<QWidget*, ANALOG_SUB_BUTTONS_NUM>, Settings::NativeAnalog::NumAnalogs>
+        analog_button_containers{};
+    /// Parent layouts for deferred analog container insertion.
+    std::array<std::array<QLayout*, ANALOG_SUB_BUTTONS_NUM>, Settings::NativeAnalog::NumAnalogs>
+        analog_button_container_layouts{};
+    std::array<std::array<int, ANALOG_SUB_BUTTONS_NUM>, Settings::NativeAnalog::NumAnalogs>
+        analog_button_container_positions{};
+
+    /// Circle Mod (轻推摇杆) multi-key data. CircleMod is an analog modifier that
+    /// applies to all analogs and is not part of NativeButton::Values.
+    std::vector<Common::ParamPackage> circlemod_param;
+    std::vector<QPushButton*> circlemod_button_map;
+    QWidget* circlemod_container = nullptr;
+    QLayout* circlemod_leaf_layout = nullptr;
+    int circlemod_btn_position = -1;
+
+    /// Touch screen coordinate bindings.
+    /// touch_points_param[point][slot] = ParamPackage with engine/key + x (0-100) + y (0-100).
+    /// Up to MAX_TOUCH_POINTS points, each with up to MAX_KEYS_PER_POINT keys.
+    std::vector<std::vector<Common::ParamPackage>> touch_points_param;
+    struct TouchPointWidgets {
+        QSlider* x_slider;
+        QSlider* y_slider;
+        std::vector<QPushButton*> key_buttons;
+        QGroupBox* group;
+    };
+    std::vector<TouchPointWidgets> touch_point_widgets;
+    static constexpr int MAX_TOUCH_POINTS = 15;
+    static constexpr int MAX_KEYS_PER_POINT = 5;
+    void SetupTouchPointsMultiKeySlots();
+    void UpdateTouchPointsMultiKeySlots();
 
     /// Analog inputs are also represented each with a single button, used to configure with an
     /// actual analog stick
@@ -108,6 +150,25 @@ private:
 
     /// Update UI to reflect current configuration.
     void UpdateButtonLabels();
+
+    /// Setup multi-key UI slots for a button: creates extra QPushButtons in a horizontal row.
+    void SetupMultiKeySlots(int button_id);
+    /// Update visibility and text of all binding slots for a button.
+    void UpdateMultiKeySlots(int button_id);
+
+    /// Setup multi-key UI slots for an analog direction button.
+    void SetupAnalogMultiKeySlots(int analog_id, int sub_button_id);
+    /// Update visibility and text of all binding slots for an analog direction.
+    void UpdateAnalogMultiKeySlots(int analog_id, int sub_button_id);
+
+    /// Setup multi-key UI slots for CircleMod (analog modifier, not in NativeButton).
+    void SetupCircleModMultiKeySlots();
+    /// Update visibility and text of all binding slots for CircleMod.
+    void UpdateCircleModMultiKeySlots();
+    /// Sync circlemod_param back into analogs_param modifier fields.
+    void SyncCircleModToAnalogs();
+    /// Load circlemod_param from analogs_param modifier fields.
+    void LoadCircleModFromAnalogs();
 
     /// Called when the button was pressed.
     void HandleClick(QPushButton* button,

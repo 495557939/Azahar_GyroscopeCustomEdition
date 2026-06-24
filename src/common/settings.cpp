@@ -89,6 +89,7 @@ void LogSettings() {
     log_setting("Core_UseCpuJit", values.use_cpu_jit.GetValue());
     log_setting("Core_CPUClockPercentage", values.cpu_clock_percentage.GetValue());
     log_setting("Controller_UseArticController", values.use_artic_base_controller.GetValue());
+    log_setting("Controller_UseAdaptiveControllerMapping", values.use_adaptive_controller_mapping.GetValue());
     log_setting("Renderer_UseGLES", values.use_gles.GetValue());
     log_setting("Renderer_GraphicsAPI", GetGraphicsAPIName(values.graphics_api.GetValue()));
     log_setting("Renderer_AsyncShaders", values.async_shader_compilation.GetValue());
@@ -129,6 +130,8 @@ void LogSettings() {
     log_setting("Layout_LargeScreenProportion", values.large_screen_proportion.GetValue());
     log_setting("Layout_SmallScreenPosition", values.small_screen_position.GetValue());
     // log_setting("Layout_LayoutsToCycle",values.layouts_to_cycle.GetValue());
+    log_setting("Layout_DiyPct_Internal16x9", values.custom_pct_internal_16x9.GetValue());
+    log_setting("Layout_DiyPct_Internal4x3", values.custom_pct_internal_4x3.GetValue());
     log_setting("Utility_DumpTextures", values.dump_textures.GetValue());
     log_setting("Utility_CustomTextures", values.custom_textures.GetValue());
     log_setting("Utility_PreloadTextures", values.preload_textures.GetValue());

@@ -162,6 +162,16 @@
          </property>
         </widget>
        </item>
+       <item>
+        <widget class="QCheckBox" name="customPercentCheck">
+         <property name="text">
+          <string>Custom (Percent)</string>
+         </property>
+         <property name="checked">
+          <bool>false</bool>
+         </property>
+        </widget>
+       </item>
       </layout>
      </widget>
     </item>

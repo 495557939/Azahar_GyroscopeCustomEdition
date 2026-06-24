@@ -8,21 +8,29 @@
 #include <QMessageBox>
 #include <QPainter>
 #include <QWindow>
+#include <algorithm>
+#include <unordered_map>
+#include "common/math_util.h"
 #include "citra_qt/bootmanager.h"
 #include "citra_qt/citra_qt.h"
 #include "citra_qt/util/util.h"
 #include "common/color.h"
 #include "common/microprofile.h"
+#include "common/param_package.h"
 #include "common/scm_rev.h"
 #include "common/settings.h"
 #include "core/3ds.h"
 #include "core/core.h"
+#ifdef HAVE_SDL2
+#include <SDL.h>
+#endif
 #include "core/frontend/framebuffer_layout.h"
 #include "core/loader/loader.h"
 #include "core/perf_stats.h"
 #include "input_common/keyboard.h"
 #include "input_common/main.h"
 #include "input_common/motion_emu.h"
+#include "input_common/mouse/mouse.h"
 #include "video_core/custom_textures/custom_tex_manager.h"
 #include "video_core/gpu.h"
 #include "video_core/renderer_base.h"
@@ -449,12 +457,463 @@ GRenderWindow::GRenderWindow(QWidget* parent_, EmuThread* emu_thread_, Core::Sys
     setLayout(layout);
 
     this->setMouseTracking(true);
+
+    // Global mouse polling for RateContinuous mode (free cursor, no warp lock).
+    // Fires at 200 Hz, polls QCursor::pos() system-wide → AddDelta (accumulate).
+    rc_poll_timer = new QTimer(this);
+    rc_poll_timer->setInterval(5);
+    rc_poll_timer->setTimerType(Qt::PreciseTimer);
+    connect(rc_poll_timer, &QTimer::timeout, this, &GRenderWindow::PollRateContinuous);
+    rc_poll_timer->start();
+
+    // RateHold center-warp polling (also 200 Hz, timer-driven for consistency).
+    rh_poll_timer = new QTimer(this);
+    rh_poll_timer->setInterval(5);
+    rh_poll_timer->setTimerType(Qt::PreciseTimer);
+    connect(rh_poll_timer, &QTimer::timeout, this, &GRenderWindow::PollRateHold);
+    // started/stopped by StartCenterWarp/StopCenterWarp
+
+    // TiltContinuous: always-active gravity tilt (mouse % of screen center)
+    tc_poll_timer = new QTimer(this);
+    tc_poll_timer->setInterval(5);
+    tc_poll_timer->setTimerType(Qt::PreciseTimer);
+    connect(tc_poll_timer, &QTimer::timeout, this, &GRenderWindow::PollTiltContinuous);
+    tc_poll_timer->start();
+
+    // TiltHold center-warp gravity tilt (right-click cursor lock)
+    th_poll_timer = new QTimer(this);
+    th_poll_timer->setInterval(5);
+    th_poll_timer->setTimerType(Qt::PreciseTimer);
+    connect(th_poll_timer, &QTimer::timeout, this, &GRenderWindow::PollTiltHold);
+    // started/stopped on right-click hold
+
+    // Controller-to-mouse link polling (100Hz for stick/button reading)
+    link_poll_timer = new QTimer(this);
+    link_poll_timer->setInterval(10);
+    link_poll_timer->setTimerType(Qt::PreciseTimer);
+    connect(link_poll_timer, &QTimer::timeout, this, &GRenderWindow::PollControllerLink);
+    link_poll_timer->start();
     strict_context_required = QGuiApplication::platformName() == QStringLiteral("wayland") ||
                               QGuiApplication::platformName() == QStringLiteral("wayland-egl");
 
     GMainWindow* parent = GetMainWindow();
     connect(this, &GRenderWindow::FirstFrameDisplayed, parent, &GMainWindow::OnLoadComplete);
 }
+
+
+void GRenderWindow::StartCenterWarp() {
+    setCursor(Qt::BlankCursor);
+    rh_center_pos = mapToGlobal(QPoint(width() / 2, height() / 2));
+    QCursor::setPos(rh_center_pos);
+    rh_warp_active = true;
+    rh_poll_timer->start();
+}
+
+void GRenderWindow::StopCenterWarp() {
+    rh_poll_timer->stop();
+    rh_warp_active = false;
+    setCursor(Qt::ArrowCursor);
+}
+
+void GRenderWindow::PollRateContinuous() {
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    if (!motion_emu)
+        return;
+
+    // Only forward mouse input when running, not paused, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+    if (Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") != "motion_emu")
+        return;
+
+    if (motion_emu->GetMode() != InputCommon::MotionEmuMode::RateContinuous)
+        return;
+
+    QPoint cur = QCursor::pos();
+
+    if (rc_last_pos_valid) {
+        // Cooldown ticks after a screen-edge warp.
+        // SetCursorPos generates a synthetic WM_MOUSEMOVE and may race with
+        // the mouse driver's raw-input pipeline. Suppress delta for a few ticks
+        // to avoid spurious spikes causing ~180° rotation.
+        if (rc_warp_cooldown > 0) {
+            rc_warp_cooldown--;
+            rc_last_pos = cur;
+            return;
+        }
+
+        // Check for edge wrapping BEFORE computing delta.
+        // On the wrap frame we skip the delta entirely — the edge pixel values
+        // are unreliable due to the SetCursorPos synthetic event.
+        QScreen* screen =
+            windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen();
+        if (screen) {
+            constexpr int margin = 10;
+            constexpr int warp_inset = 50;
+            QRect geom = screen->geometry();
+            QPoint warped = cur;
+            bool need_warp = false;
+
+            if (cur.x() >= geom.right() - margin) {
+                warped.setX(geom.left() + warp_inset);
+                need_warp = true;
+            } else if (cur.x() <= geom.left() + margin) {
+                warped.setX(geom.right() - warp_inset);
+                need_warp = true;
+            }
+            if (cur.y() >= geom.bottom() - margin) {
+                warped.setY(geom.top() + warp_inset);
+                need_warp = true;
+            } else if (cur.y() <= geom.top() + margin) {
+                warped.setY(geom.bottom() - warp_inset);
+                need_warp = true;
+            }
+
+            if (need_warp) {
+                QCursor::setPos(warped);
+                rc_warp_cooldown = 3; // warp tick + 2 recovery ticks (15ms)
+                rc_last_pos = warped;
+                return;
+            }
+        }
+
+        // No warp, no cooldown: normal delta tracking
+        float dx = static_cast<float>(cur.x() - rc_last_pos.x());
+        float dy = static_cast<float>(cur.y() - rc_last_pos.y());
+
+        // Per-tick cap to guard against driver-level cursor correction spikes
+        // (some mouse drivers fight SetCursorPos by injecting large synthetic deltas)
+        constexpr float max_delta_per_tick = 50.0f;
+        dx = std::clamp(dx, -max_delta_per_tick, max_delta_per_tick);
+        dy = std::clamp(dy, -max_delta_per_tick, max_delta_per_tick);
+
+        if (dx != 0.0f || dy != 0.0f) {
+            motion_emu->AddDelta(dx, dy);
+        }
+    }
+
+    rc_last_pos = cur;
+    rc_last_pos_valid = true;
+}
+
+void GRenderWindow::PollRateHold() {
+    // Center-warp timer for RateHold (right-click cursor lock).
+    // Fires at 200 Hz. Reads mouse offset from widget center, pushes AddDelta,
+    // then warps cursor back to center — same principle as RateContinuous timer
+    // but anchored to the widget center instead of absolute screen tracking.
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    if (!motion_emu || !rh_warp_active)
+        return;
+
+    // Only forward mouse input when running, not paused, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+    if (Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") != "motion_emu")
+        return;
+
+    if (motion_emu->GetMode() != InputCommon::MotionEmuMode::RateHold)
+        return;
+
+    // Refresh center in case window moved/resized
+    rh_center_pos = mapToGlobal(QPoint(width() / 2, height() / 2));
+
+    QPoint cur = QCursor::pos();
+    float dx = static_cast<float>(cur.x() - rh_center_pos.x());
+    float dy = static_cast<float>(cur.y() - rh_center_pos.y());
+
+    if (dx != 0.0f || dy != 0.0f) {
+        motion_emu->AddDelta(dx, dy);
+    }
+
+    QCursor::setPos(rh_center_pos);
+}
+void GRenderWindow::PollTiltContinuous() {
+    // Always-active gravity tilt. Reads mouse position as % of screen center,
+    // maps to tilt angle (yaw/pitch), feeds to motion_emu via SetTiltOffset.
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    if (!motion_emu)
+        return;
+
+    // Only forward mouse input when running, not paused, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+    if (Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") != "motion_emu")
+        return;
+
+    if (motion_emu->GetMode() != InputCommon::MotionEmuMode::TiltContinuous)
+        return;
+
+    float max_angle_rad = motion_emu->GetTiltMaxAngle() * Common::PI / 180.0f;
+    if (max_angle_rad <= 0.0f)
+        return;
+
+    QScreen* screen =
+        windowHandle() ? windowHandle()->screen() : QGuiApplication::primaryScreen();
+    if (!screen)
+        return;
+
+    QRect geom = screen->geometry();
+    QPoint center = geom.center();
+    QPoint cur = QCursor::pos();
+
+    // Normalize mouse offset to [-1, 1] relative to half-screen
+    float dx = static_cast<float>(cur.x() - center.x()) / (geom.width() * 0.5f);
+    float dy = static_cast<float>(cur.y() - center.y()) / (geom.height() * 0.5f);
+    dx = std::clamp(dx, -1.0f, 1.0f);
+    dy = std::clamp(dy, -1.0f, 1.0f);
+
+    float yaw = dx * max_angle_rad;
+    float pitch = -dy * max_angle_rad;  // screen Y inverted
+    motion_emu->SetTiltOffset(yaw, pitch);
+}
+
+void GRenderWindow::PollTiltHold() {
+    // Right-click gravity tilt. Cursor locked to widget center (like RateHold
+    // but outputs gravity tilt instead of angular velocity).
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    if (!motion_emu || !th_warp_active)
+        return;
+
+    // Only forward mouse input when running, not paused, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+    if (Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") != "motion_emu")
+        return;
+
+    if (motion_emu->GetMode() != InputCommon::MotionEmuMode::TiltHold)
+        return;
+
+    float max_angle_rad = motion_emu->GetTiltMaxAngle() * Common::PI / 180.0f;
+    if (max_angle_rad <= 0.0f)
+        return;
+
+    // Refresh center in case window moved/resized
+    th_center_pos = mapToGlobal(QPoint(width() / 2, height() / 2));
+
+    QPoint cur = QCursor::pos();
+    float dx = static_cast<float>(cur.x() - th_center_pos.x());
+    float dy = static_cast<float>(cur.y() - th_center_pos.y());
+
+    // Normalize to widget half-size, clamp to [-1, 1]
+    float half_w = width() * 0.5f;
+    float half_h = height() * 0.5f;
+    if (half_w > 0.0f) dx /= half_w;
+    if (half_h > 0.0f) dy /= half_h;
+    dx = std::clamp(dx, -1.0f, 1.0f);
+    dy = std::clamp(dy, -1.0f, 1.0f);
+
+    float yaw = dx * max_angle_rad;
+    float pitch = -dy * max_angle_rad;
+    motion_emu->SetTiltOffset(yaw, pitch);
+
+    // Warp cursor back to center (same as RateHold center-warp)
+    QCursor::setPos(th_center_pos);
+}
+
+void GRenderWindow::PollControllerLink() {
+#ifdef HAVE_SDL2
+    // Only active when emulation is running, window is focused, and motion is mouse-based.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+
+    Common::ParamPackage motion_param(
+        Settings::values.current_input_profile.motion_device);
+    if (motion_param.Get("engine", "") != "motion_emu")
+        return;
+
+    const bool link_cstick = motion_param.Get("link_cstick", false);
+    const bool link_circle = motion_param.Get("link_circle_pad", false);
+    const bool link_dpad = motion_param.Get("link_dpad", false);
+    const bool link_abxy = motion_param.Get("link_abxy", false);
+    if (!link_cstick && !link_circle && !link_dpad && !link_abxy)
+        return;
+
+    const float link_speed = motion_param.Get("link_speed", 0.4f);
+
+    constexpr float DEADZONE = 0.15f;
+    constexpr float STICK_BASE = 8.0f;
+    constexpr float BUTTON_BASE = 4.0f;
+
+    // Direction → delta mapping for each 3DS button index
+    struct DirMap { float dx; float dy; };
+    static const std::unordered_map<int, DirMap> kDirMap = {
+        {Settings::NativeButton::A,     { 1.0f,  0.0f}},
+        {Settings::NativeButton::B,     { 0.0f,  1.0f}},
+        {Settings::NativeButton::X,     { 0.0f, -1.0f}},
+        {Settings::NativeButton::Y,     {-1.0f,  0.0f}},
+        {Settings::NativeButton::Up,    { 0.0f, -1.0f}},
+        {Settings::NativeButton::Down,  { 0.0f,  1.0f}},
+        {Settings::NativeButton::Left,  {-1.0f,  0.0f}},
+        {Settings::NativeButton::Right, { 1.0f,  0.0f}},
+    };
+
+    // Which 3DS buttons belong to which link category
+    auto IsLinked = [&](int btn) -> bool {
+        if (btn == Settings::NativeButton::A || btn == Settings::NativeButton::B ||
+            btn == Settings::NativeButton::X || btn == Settings::NativeButton::Y)
+            return link_abxy;
+        if (btn == Settings::NativeButton::Up || btn == Settings::NativeButton::Down ||
+            btn == Settings::NativeButton::Left || btn == Settings::NativeButton::Right)
+            return link_dpad;
+        return false;
+    };
+
+    // Check if a keyboard key is currently pressed (via event tracking)
+    auto IsKeyPressed = [this](int keycode) -> bool {
+        return pressed_keys.count(keycode) > 0;
+    };
+
+    // Pre-open SDL controller for button/axis checks
+    SDL_GameController* ctrl = nullptr;
+    int num_joy = SDL_NumJoysticks();
+    for (int idx = 0; idx < num_joy; ++idx) {
+        if (SDL_IsGameController(idx)) {
+            ctrl = SDL_GameControllerOpen(idx);
+            if (ctrl) break;
+        }
+    }
+
+    // Helper: check if a ParamPackage binding is currently active
+    auto IsBindingActive = [&](const Common::ParamPackage& p) -> float {
+        const std::string engine = p.Get("engine", "");
+        if (engine == "keyboard") {
+            int code = p.Get("code", 0);
+            if (code > 0 && IsKeyPressed(code))
+                return BUTTON_BASE;
+        } else if (engine == "sdl" && ctrl) {
+            if (p.Has("gc_button")) {
+                int gc_btn = p.Get("gc_button", -1);
+                if (gc_btn >= 0 && SDL_GameControllerGetButton(ctrl,
+                        static_cast<SDL_GameControllerButton>(gc_btn)))
+                    return BUTTON_BASE;
+            }
+            if (p.Has("gc_axis")) {
+                int gc_axis = p.Get("gc_axis", -1);
+                if (gc_axis >= 0) {
+                    float raw = SDL_GameControllerGetAxis(ctrl,
+                        static_cast<SDL_GameControllerAxis>(gc_axis)) * (1.0f / 32768.0f);
+                    if (std::abs(raw) > DEADZONE)
+                        return raw * STICK_BASE;
+                }
+            }
+            if (p.Has("hat")) {
+                int hat = p.Get("hat", -1);
+                std::string dir = p.Get("direction", "");
+                if (hat >= 0) {
+                    Uint8 val = SDL_JoystickGetHat(
+                        SDL_GameControllerGetJoystick(ctrl), hat);
+                    // Check each direction bit
+                    if (dir == "up" && (val & SDL_HAT_UP)) return BUTTON_BASE;
+                    if (dir == "down" && (val & SDL_HAT_DOWN)) return BUTTON_BASE;
+                    if (dir == "left" && (val & SDL_HAT_LEFT)) return BUTTON_BASE;
+                    if (dir == "right" && (val & SDL_HAT_RIGHT)) return BUTTON_BASE;
+                }
+            }
+            if (p.Has("axis")) {
+                int axis = p.Get("axis", -1);
+                if (axis >= 0) {
+                    float raw = SDL_JoystickGetAxis(
+                        SDL_GameControllerGetJoystick(ctrl), axis) * (1.0f / 32768.0f);
+                    std::string dir = p.Get("direction", "");
+                    if (dir == "+" && raw > DEADZONE) return raw * STICK_BASE;
+                    if (dir == "-" && raw < -DEADZONE) return raw * STICK_BASE;
+                }
+            }
+            if (p.Has("button")) {
+                int btn = p.Get("button", -1);
+                if (btn >= 0 && SDL_JoystickGetButton(
+                        SDL_GameControllerGetJoystick(ctrl), btn))
+                    return BUTTON_BASE;
+            }
+        }
+        return 0.0f;
+    };
+
+    float total_dx = 0.0f, total_dy = 0.0f;
+
+    // For C-Stick / Circle Pad analog link: read raw SDL axes directly
+    // (these map gamepad sticks directly to deltas regardless of bindings)
+    if (ctrl) {
+        auto ReadAxis = [](SDL_GameController* c, SDL_GameControllerAxis a) -> float {
+            float v = SDL_GameControllerGetAxis(c, a) * (1.0f / 32768.0f);
+            return (std::abs(v) > DEADZONE) ? v : 0.0f;
+        };
+        if (link_cstick) {
+            total_dx += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_RIGHTX) * STICK_BASE;
+            total_dy += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_RIGHTY) * STICK_BASE;
+        }
+        if (link_circle) {
+            total_dx += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_LEFTX) * STICK_BASE;
+            total_dy += ReadAxis(ctrl, SDL_CONTROLLER_AXIS_LEFTY) * STICK_BASE;
+        }
+    }
+
+    // For digital buttons (ABXY, DPad): check ALL bindings from input profile
+    const auto& profile = Settings::values.current_input_profile;
+    for (int btn = 0; btn < Settings::NativeButton::NumButtons; ++btn) {
+        if (!IsLinked(btn)) continue;
+        auto it = kDirMap.find(btn);
+        if (it == kDirMap.end()) continue;
+
+        float strength = 0.0f;
+        for (const auto& binding_str : profile.buttons[btn]) {
+            Common::ParamPackage p(binding_str);
+            float s = IsBindingActive(p);
+            if (s > strength) strength = s; // take strongest active binding
+        }
+        if (strength > 0.0f) {
+            total_dx += it->second.dx * strength;
+            total_dy += it->second.dy * strength;
+        }
+    }
+
+    if (ctrl)
+        SDL_GameControllerClose(ctrl);
+
+    // Apply speed multiplier
+    total_dx *= link_speed;
+    total_dy *= link_speed;
+
+    if (total_dx == 0.0f && total_dy == 0.0f)
+        return;
+
+    // Feed virtual delta to MotionEmu
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    if (!motion_emu)
+        return;
+
+    auto mode = motion_emu->GetMode();
+    if (mode == InputCommon::MotionEmuMode::RateContinuous ||
+        mode == InputCommon::MotionEmuMode::RateHold) {
+        motion_emu->AddDelta(total_dx, total_dy);
+    } else if (mode == InputCommon::MotionEmuMode::TiltContinuous ||
+               mode == InputCommon::MotionEmuMode::TiltHold) {
+        static float accum_x = 0.0f, accum_y = 0.0f;
+        accum_x += total_dx * 0.005f;
+        accum_y += total_dy * 0.005f;
+        accum_x = std::clamp(accum_x, -1.0f, 1.0f);
+        accum_y = std::clamp(accum_y, -1.0f, 1.0f);
+        float max_angle_rad = motion_emu->GetTiltMaxAngle() * Common::PI / 180.0f;
+        motion_emu->SetTiltOffset(accum_x * max_angle_rad,
+                                  -accum_y * max_angle_rad);
+    }
+#endif
+}
+
 
 GRenderWindow::~GRenderWindow() = default;
 
@@ -529,10 +988,12 @@ void GRenderWindow::closeEvent(QCloseEvent* event) {
 
 void GRenderWindow::keyPressEvent(QKeyEvent* event) {
     InputCommon::GetKeyboard()->PressKey(event->key());
+    pressed_keys.insert(event->key());
 }
 
 void GRenderWindow::keyReleaseEvent(QKeyEvent* event) {
     InputCommon::GetKeyboard()->ReleaseKey(event->key());
+    pressed_keys.erase(event->key());
 }
 
 void GRenderWindow::mousePressEvent(QMouseEvent* event) {
@@ -541,11 +1002,51 @@ void GRenderWindow::mousePressEvent(QMouseEvent* event) {
     }
 
     auto pos = event->pos();
+
+    // Forward mouse button state for multi-key mapping
+    if (event->button() == Qt::LeftButton)
+        InputCommon::MouseState::Instance().PressButton(0);
+    else if (event->button() == Qt::RightButton)
+        InputCommon::MouseState::Instance().PressButton(1);
+    else if (event->button() == Qt::MiddleButton)
+        InputCommon::MouseState::Instance().PressButton(2);
+
+    // Only forward mouse input to the game when emulation is actively running
+    // (not paused or stopped), window has focus, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+
+    const bool motion_is_mouse =
+        Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") == "motion_emu";
+    if (!motion_is_mouse)
+        return;
+
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    auto mode = motion_emu->GetMode();
+
     if (event->button() == Qt::LeftButton) {
         const auto [x, y] = ScaleTouch(pos);
         this->TouchPressed(x, y);
     } else if (event->button() == Qt::RightButton) {
-        InputCommon::GetMotionEmu()->BeginTilt(pos.x(), pos.y());
+        // Right-click only applies to Absolute, RateHold, TiltHold.
+        // RateContinuous / TiltContinuous are always-on — no right-click action.
+        if (mode == InputCommon::MotionEmuMode::Absolute) {
+            motion_emu->BeginTilt(pos.x(), pos.y());
+        } else if (mode == InputCommon::MotionEmuMode::RateHold) {
+            motion_emu->BeginTilt(pos.x(), pos.y());
+            StartCenterWarp();
+        } else if (mode == InputCommon::MotionEmuMode::TiltHold) {
+            motion_emu->BeginTilt(pos.x(), pos.y());
+            // Cursor-lock: hide + warp to center
+            setCursor(Qt::BlankCursor);
+            th_center_pos = mapToGlobal(QPoint(width() / 2, height() / 2));
+            QCursor::setPos(th_center_pos);
+            th_warp_active = true;
+            th_poll_timer->start();
+        }
     }
     emit MouseActivity();
 }
@@ -555,10 +1056,41 @@ void GRenderWindow::mouseMoveEvent(QMouseEvent* event) {
         return; // touch input is handled in TouchUpdateEvent
     }
 
-    auto pos = event->pos();
-    const auto [x, y] = ScaleTouch(pos);
-    this->TouchMoved(x, y);
-    InputCommon::GetMotionEmu()->Tilt(pos.x(), pos.y());
+    // Only forward mouse input to the game when emulation is actively running
+    // (not paused or stopped), window has focus, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+
+    const bool motion_is_mouse =
+        Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") == "motion_emu";
+    if (!motion_is_mouse)
+        return;
+
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    auto mode = motion_emu->GetMode();
+    bool is_rate_mode = (mode == InputCommon::MotionEmuMode::RateHold ||
+                       mode == InputCommon::MotionEmuMode::RateContinuous);
+    bool is_tilt_mode = (mode == InputCommon::MotionEmuMode::TiltContinuous ||
+                        mode == InputCommon::MotionEmuMode::TiltHold);
+
+    if ((is_rate_mode || is_tilt_mode) && motion_emu->IsDeviceActive()) {
+        // Timer-driven modes: mouseMoveEvent does nothing for tilt/rotation.
+    } else {
+        // Absolute mode or not active: touch path
+        if (cursor().shape() == Qt::BlankCursor && !th_warp_active) {
+            setCursor(Qt::ArrowCursor);
+        }
+        auto pos = event->pos();
+        const auto [x, y] = ScaleTouch(pos);
+        this->TouchMoved(x, y);
+        if (mode == InputCommon::MotionEmuMode::Absolute) {
+            motion_emu->Tilt(pos.x(), pos.y());
+        }
+        // Tilt modes: gravity set via timer, skip Tilt()
+    }
     emit MouseActivity();
 }
 
@@ -567,11 +1099,57 @@ void GRenderWindow::mouseReleaseEvent(QMouseEvent* event) {
         return; // touch input is handled in TouchEndEvent
     }
 
+    // Forward mouse button release for multi-key mapping
     if (event->button() == Qt::LeftButton)
-        this->TouchReleased();
+        InputCommon::MouseState::Instance().ReleaseButton(0);
     else if (event->button() == Qt::RightButton)
-        InputCommon::GetMotionEmu()->EndTilt();
+        InputCommon::MouseState::Instance().ReleaseButton(1);
+    else if (event->button() == Qt::MiddleButton)
+        InputCommon::MouseState::Instance().ReleaseButton(2);
+
+    // Only forward mouse input to the game when emulation is actively running
+    // (not paused or stopped), window has focus, and motion source is mouse.
+    if (!emu_thread || !emu_thread->IsRunning() || system.frame_limiter.IsFrameAdvancing())
+        return;
+    if (!isActiveWindow())
+        return;
+
+    const bool motion_is_mouse =
+        Common::ParamPackage(Settings::values.current_input_profile.motion_device)
+            .Get("engine", "") == "motion_emu";
+    if (!motion_is_mouse)
+        return;
+
+    auto* motion_emu = InputCommon::GetMotionEmu();
+    auto mode = motion_emu->GetMode();
+
+    if (event->button() == Qt::LeftButton) {
+        this->TouchReleased();
+    } else if (event->button() == Qt::RightButton) {
+        if (mode == InputCommon::MotionEmuMode::Absolute ||
+            mode == InputCommon::MotionEmuMode::RateHold) {
+            motion_emu->EndTilt();
+            StopCenterWarp();
+        } else if (mode == InputCommon::MotionEmuMode::TiltHold) {
+            motion_emu->EndTilt();
+            th_poll_timer->stop();
+            th_warp_active = false;
+            setCursor(Qt::ArrowCursor);
+            motion_emu->SetTiltOffset(0.0f, 0.0f);  // snap back to neutral
+        }
+        // RateContinuous / TiltContinuous: right-click release does nothing
+    }
     emit MouseActivity();
+}
+
+void GRenderWindow::wheelEvent(QWheelEvent* event) {
+    // Forward mouse wheel events for multi-key mapping
+    if (event->angleDelta().y() > 0)
+        InputCommon::MouseState::Instance().WheelUp();
+    else if (event->angleDelta().y() < 0)
+        InputCommon::MouseState::Instance().WheelDown();
+    // Let the event propagate for other handlers
+    QWidget::wheelEvent(event);
 }
 
 void GRenderWindow::TouchBeginEvent(const QTouchEvent* event) {
@@ -626,6 +1204,8 @@ void GRenderWindow::focusOutEvent(QFocusEvent* event) {
     if (auto* keyboard = InputCommon::GetKeyboard(); keyboard) {
         keyboard->ReleaseAllKeys();
     }
+    // On focus loss: exit center-warping, restore visible cursor
+    StopCenterWarp();
     has_focus = false;
 }
 

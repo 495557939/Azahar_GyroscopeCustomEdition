@@ -14,6 +14,8 @@
 class QVBoxLayout;
 class QLabel;
 class QPushButton;
+class QDoubleSpinBox;
+class QCheckBox;
 class QTimer;
 
 namespace Ui {
@@ -72,6 +74,23 @@ private:
     bool CanCloseDialog();
 
     std::unique_ptr<Ui::ConfigureMotionTouch> ui;
+
+    // Programmatically-added controls (not in .ui)
+    QLabel* motion_tilt_max_label = nullptr;
+    QDoubleSpinBox* motion_tilt_max_angle = nullptr;
+    QCheckBox* motion_clamp_pitch = nullptr;
+    QCheckBox* motion_auto_tilt_y = nullptr;
+    QCheckBox* motion_auto_tilt_y_invert = nullptr;
+    QCheckBox* motion_auto_tilt_x = nullptr;
+    QDoubleSpinBox* motion_auto_tilt_speed = nullptr;
+
+    // Controller-to-mouse linking (only visible when motion provider is Mouse)
+    QCheckBox* link_cstick = nullptr;
+    QCheckBox* link_circle_pad = nullptr;
+    QCheckBox* link_dpad = nullptr;
+    QCheckBox* link_abxy = nullptr;
+    QDoubleSpinBox* link_speed = nullptr;
+    QWidget* link_group = nullptr;  // parent widget for all link controls
 
     // Used for SDL input polling
     std::string guid;

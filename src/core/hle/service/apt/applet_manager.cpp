@@ -1687,10 +1687,17 @@ void AppletManager::CaptureFrameBuffers() {
 }
 
 void AppletManager::LoadInputDevices() {
-    home_button = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::Home]);
-    power_button = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::Power]);
+    // Multi-key mapping: create devices for all bindings per button
+    home_button.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::Home]) {
+        if (!bind.empty())
+            home_button.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
+    power_button.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::Power]) {
+        if (!bind.empty())
+            power_button.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
 }
 
 /// Handles updating the current Applet every time it's called.
@@ -1729,13 +1736,15 @@ void AppletManager::ButtonUpdateEvent(std::uintptr_t user_data, s64 cycles_late)
     // where the home menu was already loaded by the user (last condition).
 
     if (GetAppletSlot(AppletSlot::HomeMenu)->registered) {
-        const bool home_state = home_button->GetStatus();
+        // Multi-key mapping: OR all bindings
+        bool home_state = false, power_state = false;
+        for (const auto& dev : home_button) { if (dev->GetStatus()) { home_state = true; break; } }
+        for (const auto& dev : power_button) { if (dev->GetStatus()) { power_state = true; break; } }
         if (home_state && !last_home_button_state) {
             SendNotification(Notification::HomeButtonSingle);
         }
         last_home_button_state = home_state;
 
-        const bool power_state = power_button->GetStatus();
         if (power_state && !last_power_button_state) {
             SendNotificationToAll(Notification::PowerButtonClick);
         }

@@ -267,8 +267,12 @@ void ExtraHID::SendHIDStatus() {
         response.c_stick.c_stick_x.Assign(static_cast<u32>(C_STICK_CENTER + C_STICK_RADIUS * x));
         response.c_stick.c_stick_y.Assign(static_cast<u32>(C_STICK_CENTER + C_STICK_RADIUS * y));
         response.buttons.battery_level.Assign(0x1F);
-        response.buttons.zl_not_held.Assign(!zl->GetStatus());
-        response.buttons.zr_not_held.Assign(!zr->GetStatus());
+        // Multi-key mapping: OR all bindings
+        bool zl_held = false, zr_held = false;
+        for (const auto& dev : zl) { if (dev->GetStatus()) { zl_held = true; break; } }
+        for (const auto& dev : zr) { if (dev->GetStatus()) { zr_held = true; break; } }
+        response.buttons.zl_not_held.Assign(!zl_held);
+        response.buttons.zr_not_held.Assign(!zr_held);
         response.buttons.r_not_held.Assign(1);
         response.unknown = 0;
     }
@@ -285,10 +289,17 @@ void ExtraHID::RequestInputDevicesReload() {
 }
 
 void ExtraHID::LoadInputDevices() {
-    zl = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]);
-    zr = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]);
+    // Multi-key mapping: create devices for all bindings per button
+    zl.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]) {
+        if (!bind.empty())
+            zl.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
+    zr.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]) {
+        if (!bind.empty())
+            zr.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
     c_stick = Input::CreateDevice<Input::AnalogDevice>(
         Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CStick]);
 }

@@ -693,6 +693,7 @@ void GMainWindow::InitializeWidgets() {
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Separate_Windows);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Hybrid_Screen);
     actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Custom_Layout);
+    actionGroup_ScreenLayouts->addAction(ui->action_Screen_Layout_Custom_Layout_Percent);
 
     QActionGroup* actionGroup_SmallPositions = new QActionGroup(this);
     actionGroup_SmallPositions->addAction(ui->action_Small_Screen_TopRight);
@@ -1167,12 +1168,31 @@ void GMainWindow::ConnectMenuEvents() {
     connect_menu(ui->action_Screen_Layout_Side_by_Side, &GMainWindow::ChangeScreenLayout);
     connect_menu(ui->action_Screen_Layout_Separate_Windows, &GMainWindow::ChangeScreenLayout);
     connect_menu(ui->action_Screen_Layout_Custom_Layout, &GMainWindow::ChangeScreenLayout);
+    connect_menu(ui->action_Screen_Layout_Custom_Layout_Percent, &GMainWindow::ChangeScreenLayout);
     connect_menu(ui->action_Screen_Layout_Swap_Screens, &GMainWindow::OnSwapScreens);
     connect_menu(ui->action_Screen_Layout_Upright_Screens, &GMainWindow::OnRotateScreens);
     connect_menu(ui->action_Small_Screen_TopRight, &GMainWindow::ChangeSmallScreenPosition);
     connect_menu(ui->action_Small_Screen_MiddleRight, &GMainWindow::ChangeSmallScreenPosition);
     connect_menu(ui->action_Small_Screen_BottomRight, &GMainWindow::ChangeSmallScreenPosition);
     connect_menu(ui->action_Small_Screen_TopLeft, &GMainWindow::ChangeSmallScreenPosition);
+
+    // DiySC: Auto-hide menu bar
+    action_auto_hide_menu_ = ui->menu_View->addAction(tr("Auto-hide Menu Bar"));
+    action_auto_hide_menu_->setCheckable(true);
+    connect(action_auto_hide_menu_, &QAction::toggled, this, &GMainWindow::OnToggleAutoHideMenu);
+    auto_hide_menu_timer_ = new QTimer(this);
+    auto_hide_menu_timer_->setInterval(500);
+    auto_hide_menu_timer_->setSingleShot(true);
+    connect(auto_hide_menu_timer_, &QTimer::timeout, this, [this]() {
+        if (auto_hide_menu_enabled_ && !ui->menubar->isHidden()) {
+            // Use global cursor pos for reliable hit-test
+            QPoint global_pos = QCursor::pos();
+            QRect mb_rect(mapToGlobal(ui->menubar->pos()), ui->menubar->size());
+            if (!mb_rect.contains(global_pos)) {
+                ui->menubar->hide();
+            }
+        }
+    });
     connect_menu(ui->action_Small_Screen_MiddleLeft, &GMainWindow::ChangeSmallScreenPosition);
     connect_menu(ui->action_Small_Screen_BottomLeft, &GMainWindow::ChangeSmallScreenPosition);
     connect_menu(ui->action_Small_Screen_Above, &GMainWindow::ChangeSmallScreenPosition);
@@ -1603,6 +1623,9 @@ void GMainWindow::BootGame(const QString& filename) {
 
     emulation_running = true;
     if (ui->action_Fullscreen->isChecked()) {
+        ShowFullscreen();
+    } else if (UISettings::values.auto_fullscreen_on_game_start.GetValue()) {
+        ui->action_Fullscreen->setChecked(true);
         ShowFullscreen();
     }
 
@@ -2784,6 +2807,8 @@ void GMainWindow::ChangeScreenLayout() {
         new_layout = Settings::LayoutOption::SeparateWindows;
     } else if (ui->action_Screen_Layout_Custom_Layout->isChecked()) {
         new_layout = Settings::LayoutOption::CustomLayout;
+    } else if (ui->action_Screen_Layout_Custom_Layout_Percent->isChecked()) {
+        new_layout = Settings::LayoutOption::CustomLayoutPercent;
     }
 
     Settings::values.layout_option = new_layout;
@@ -2939,6 +2964,7 @@ void GMainWindow::OnConfigure() {
     Settings::SetConfiguringGlobal(true);
     ConfigureDialog configureDialog(this, hotkey_registry, system, gl_renderer, physical_devices,
                                     !multiplayer_state->IsHostingPublicRoom());
+    configureDialog.SetSaveCallback([this] { config->Save(); });
     connect(&configureDialog, &ConfigureDialog::LanguageChanged, this,
             &GMainWindow::OnLanguageChanged);
     auto old_theme = UISettings::values.theme;
@@ -3071,6 +3097,46 @@ void GMainWindow::OnToggleFilterBar() {
     }
 }
 
+void GMainWindow::OnToggleAutoHideMenu() {
+    if (!action_auto_hide_menu_) {
+        return;
+    }
+    auto_hide_menu_enabled_ = action_auto_hide_menu_->isChecked();
+    if (auto_hide_menu_enabled_) {
+        qApp->installEventFilter(this);
+        setMouseTracking(true);
+        // Start with menu visible, timer will auto-hide after cursor leaves
+        auto_hide_menu_timer_->start();
+    } else {
+        qApp->removeEventFilter(this);
+        ui->menubar->show();
+    }
+}
+
+bool GMainWindow::eventFilter(QObject* object, QEvent* event) {
+    if (auto_hide_menu_enabled_ && event->type() == QEvent::MouseMove) {
+        // Must use window-relative coordinates via global pos —
+        // the event's local pos is relative to whichever child widget
+        // received it, which varies. qApp filter catches them all.
+        if (isActiveWindow()) {
+            QPoint local_pos = mapFromGlobal(QCursor::pos());
+            if (rect().contains(local_pos)) {
+                const int threshold = ui->menubar->height() + 5;
+                if (local_pos.y() <= 5) {
+                    // Mouse near top of window: show menu
+                    ui->menubar->show();
+                } else if (local_pos.y() > threshold) {
+                    // Mouse below menubar area: hide after delay
+                    if (!auto_hide_menu_timer_->isActive()) {
+                        auto_hide_menu_timer_->start();
+                    }
+                }
+            }
+        }
+    }
+    return QMainWindow::eventFilter(object, event);
+}
+
 void GMainWindow::OnCreateGraphicsSurfaceViewer() {
     auto graphicsSurfaceViewerWidget =
         new GraphicsSurfaceWidget(system, Pica::g_debug_context, this);
@@ -3178,7 +3244,7 @@ void GMainWindow::OnCaptureScreenshot() {
                     this, tr("Invalid Screenshot Directory"),
                     tr("Cannot create specified screenshot directory. Screenshot "
                        "path is set back to its default value."));
-                path = FileUtil::GetUserPath(FileUtil::UserPath::UserDir);
+                path = "./UserProfile/";
                 path.append("screenshots/");
                 UISettings::values.screenshot_path = path;
             };
@@ -4272,6 +4338,8 @@ void GMainWindow::SyncMenuUISettings() {
         Settings::values.layout_option.GetValue() == Settings::LayoutOption::SeparateWindows);
     ui->action_Screen_Layout_Custom_Layout->setChecked(Settings::values.layout_option.GetValue() ==
                                                        Settings::LayoutOption::CustomLayout);
+    ui->action_Screen_Layout_Custom_Layout_Percent->setChecked(
+        Settings::values.layout_option.GetValue() == Settings::LayoutOption::CustomLayoutPercent);
     ui->action_Screen_Layout_Swap_Screens->setChecked(Settings::values.swap_screen.GetValue());
     ui->action_Screen_Layout_Upright_Screens->setChecked(
         Settings::values.upright_screen.GetValue());

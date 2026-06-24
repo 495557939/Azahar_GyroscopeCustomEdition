@@ -53,17 +53,24 @@ struct SharedMem {
 static_assert(sizeof(SharedMem) == 0x98, "SharedMem has wrong size!");
 
 void IR_RST::LoadInputDevices() {
-    zl_button = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]);
-    zr_button = Input::CreateDevice<Input::ButtonDevice>(
-        Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]);
+    // Multi-key mapping: create devices for all bindings per button
+    zl_button.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZL]) {
+        if (!bind.empty())
+            zl_button.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
+    zr_button.clear();
+    for (const auto& bind : Settings::values.current_input_profile.buttons[Settings::NativeButton::ZR]) {
+        if (!bind.empty())
+            zr_button.push_back(Input::CreateDevice<Input::ButtonDevice>(bind));
+    }
     c_stick = Input::CreateDevice<Input::AnalogDevice>(
         Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CStick]);
 }
 
 void IR_RST::UnloadInputDevices() {
-    zl_button = nullptr;
-    zr_button = nullptr;
+    zl_button.clear();
+    zr_button.clear();
     c_stick = nullptr;
 }
 
@@ -89,8 +96,12 @@ void IR_RST::UpdateCallback(std::uintptr_t user_data, s64 cycles_late) {
 
         system.Movie().HandleIrRst(state, c_stick_x, c_stick_y);
     } else {
-        state.zl.Assign(zl_button->GetStatus());
-        state.zr.Assign(zr_button->GetStatus());
+        // Multi-key mapping: OR all bindings
+        bool zl_pressed = false, zr_pressed = false;
+        for (const auto& dev : zl_button) { if (dev->GetStatus()) { zl_pressed = true; break; } }
+        for (const auto& dev : zr_button) { if (dev->GetStatus()) { zr_pressed = true; break; } }
+        state.zl.Assign(zl_pressed);
+        state.zr.Assign(zr_pressed);
 
         // Get current c-stick position and update c-stick direction
         float c_stick_x_f, c_stick_y_f;

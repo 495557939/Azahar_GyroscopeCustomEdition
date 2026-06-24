@@ -107,10 +107,14 @@ void Config::ReadValues() {
     // Controls
     for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
         std::string default_param = InputManager::GenerateButtonParamPackage(default_buttons[i]);
-        Settings::values.current_input_profile.buttons[i] = android_config->GetString(
+        // Multi-key mapping: read single binding (Android INI format, one per button)
+        std::string val = android_config->GetString(
             "Controls", Settings::NativeButton::mapping[i], default_param);
+        Settings::values.current_input_profile.buttons[i].clear();
+        if (!val.empty())
+            Settings::values.current_input_profile.buttons[i].push_back(val);
         if (Settings::values.current_input_profile.buttons[i].empty())
-            Settings::values.current_input_profile.buttons[i] = default_param;
+            Settings::values.current_input_profile.buttons[i].push_back(default_param);
     }
 
     for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
@@ -123,7 +127,7 @@ void Config::ReadValues() {
 
     Settings::values.current_input_profile.motion_device = android_config->GetString(
         "Controls", "motion_device",
-        "engine:motion_emu,update_period:100,sensitivity:0.01,tilt_clamp:90.0");
+        "engine:motion_emu,update_period:20,sensitivity:0.01,tilt_clamp:90.0,per_frame:true,clamp_pitch_180:true,auto_tilt_y:true,auto_tilt_y_invert:false,auto_tilt_x:false,auto_tilt_speed:1.0");
     Settings::values.current_input_profile.touch_device =
         android_config->GetString("Controls", "touch_device", "engine:emu_window");
     Settings::values.current_input_profile.udp_input_address = android_config->GetString(

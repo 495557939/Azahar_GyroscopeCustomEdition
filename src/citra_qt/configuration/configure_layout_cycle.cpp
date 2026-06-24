@@ -55,6 +55,9 @@ void ConfigureLayoutCycle::SetConfiguration() {
         case Settings::LayoutOption::CustomLayout:
             ui->customCheck->setChecked(true);
             break;
+        case Settings::LayoutOption::CustomLayoutPercent:
+            ui->customPercentCheck->setChecked(true);
+            break;
         }
     }
 }
@@ -75,6 +78,8 @@ void ConfigureLayoutCycle::ApplyConfiguration() {
         newSetting.push_back(Settings::LayoutOption::HybridScreen);
     if (ui->customCheck->isChecked())
         newSetting.push_back(Settings::LayoutOption::CustomLayout);
+    if (ui->customPercentCheck->isChecked())
+        newSetting.push_back(Settings::LayoutOption::CustomLayoutPercent);
     if (newSetting.empty()) {
         QMessageBox::warning(this, tr("No Layout Selected"),
                              tr("Please select at least one layout option to cycle through."));

@@ -2,6 +2,7 @@
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
+#include <vector>
 #include "common/logging/log.h"
 #include "common/microprofile.h"
 #include "common/settings.h"
@@ -19,6 +20,8 @@
 #include "video_core/host_shaders/opengl_present_anaglyph_frag.h"
 #include "video_core/host_shaders/opengl_present_frag.h"
 #include "video_core/host_shaders/opengl_present_interlaced_frag.h"
+#include "video_core/host_shaders/opengl_bg_fill_frag.h"
+#include "video_core/host_shaders/opengl_bg_fill_vert.h"
 #include "video_core/host_shaders/opengl_present_vert.h"
 
 namespace OpenGL {
@@ -433,8 +436,31 @@ void RendererOpenGL::ReloadShader(Settings::StereoRenderOption render_3d) {
     uniform_i_resolution = glGetUniformLocation(shader.handle, "i_resolution");
     uniform_o_resolution = glGetUniformLocation(shader.handle, "o_resolution");
     uniform_layer = glGetUniformLocation(shader.handle, "layer");
+    uniform_screen_origin = glGetUniformLocation(shader.handle, "u_screen_origin");
+    uniform_corner_radius = glGetUniformLocation(shader.handle, "u_corner_radius");
+    uniform_bg_color = glGetUniformLocation(shader.handle, "u_bg_color");
+    uniform_edge_blur = glGetUniformLocation(shader.handle, "u_edge_blur");
+    uniform_screen_opacity = glGetUniformLocation(shader.handle, "u_opacity");
+    uniform_vignette_enable = glGetUniformLocation(shader.handle, "u_vignette_enable");
+    uniform_vignette_color = glGetUniformLocation(shader.handle, "u_vignette_color");
+    uniform_vignette_size = glGetUniformLocation(shader.handle, "u_vignette_size");
+    uniform_overlay_enable = glGetUniformLocation(shader.handle, "u_overlay_enable");
+    uniform_overlay_color = glGetUniformLocation(shader.handle, "u_overlay_color");
     attrib_position = glGetAttribLocation(shader.handle, "vert_position");
     attrib_tex_coord = glGetAttribLocation(shader.handle, "vert_tex_coord");
+
+    // DiySC: Background fill shader
+    std::string bg_frag = fragment_shader_precision_OES;
+    bg_frag += HostShaders::OPENGL_BG_FILL_FRAG;
+    bg_fill_shader.Create(HostShaders::OPENGL_BG_FILL_VERT, bg_frag);
+    bg_fill_uniform_modelview_matrix = glGetUniformLocation(bg_fill_shader.handle, "modelview_matrix");
+    bg_fill_uniform_color_texture = glGetUniformLocation(bg_fill_shader.handle, "color_texture");
+    bg_fill_uniform_tex_size = glGetUniformLocation(bg_fill_shader.handle, "u_tex_size");
+    bg_fill_uniform_blur_sigma = glGetUniformLocation(bg_fill_shader.handle, "u_blur_sigma");
+    bg_fill_uniform_scale = glGetUniformLocation(bg_fill_shader.handle, "u_scale");
+    bg_fill_uniform_darken = glGetUniformLocation(bg_fill_shader.handle, "u_darken");
+    bg_fill_uniform_direction = glGetUniformLocation(bg_fill_shader.handle, "u_direction");
+    bg_fill_uniform_max_radius = glGetUniformLocation(bg_fill_shader.handle, "u_max_radius");
 }
 
 void RendererOpenGL::ConfigureFramebufferTexture(TextureInfo& texture,
@@ -513,39 +539,51 @@ void RendererOpenGL::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
                                       float h, Layout::DisplayOrientation orientation) {
     const auto& texcoords = screen_info.display_texcoords;
 
+    // DiySC: Compute clipped texture coordinates
+    auto clipped_tc = texcoords;
+    if (current_clip_left > 0.0f || current_clip_right > 0.0f ||
+        current_clip_top > 0.0f || current_clip_bottom > 0.0f) {
+        const float tc_x_range = clipped_tc.right - clipped_tc.left;
+        const float tc_y_range = clipped_tc.top - clipped_tc.bottom;
+        clipped_tc.left += tc_x_range * current_clip_left;
+        clipped_tc.right -= tc_x_range * current_clip_right;
+        clipped_tc.top -= tc_y_range * current_clip_top;
+        clipped_tc.bottom += tc_y_range * current_clip_bottom;
+    }
+
     std::array<ScreenRectVertex, 4> vertices;
     switch (orientation) {
     case Layout::DisplayOrientation::Landscape:
         vertices = {{
-            ScreenRectVertex(x, y, texcoords.bottom, texcoords.left),
-            ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.right),
-            ScreenRectVertex(x, y + h, texcoords.top, texcoords.left),
-            ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.right),
+            ScreenRectVertex(x, y, clipped_tc.bottom, clipped_tc.left),
+            ScreenRectVertex(x + w, y, clipped_tc.bottom, clipped_tc.right),
+            ScreenRectVertex(x, y + h, clipped_tc.top, clipped_tc.left),
+            ScreenRectVertex(x + w, y + h, clipped_tc.top, clipped_tc.right),
         }};
         break;
     case Layout::DisplayOrientation::Portrait:
         vertices = {{
-            ScreenRectVertex(x, y, texcoords.bottom, texcoords.right),
-            ScreenRectVertex(x + w, y, texcoords.top, texcoords.right),
-            ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.left),
-            ScreenRectVertex(x + w, y + h, texcoords.top, texcoords.left),
+            ScreenRectVertex(x, y, clipped_tc.bottom, clipped_tc.right),
+            ScreenRectVertex(x + w, y, clipped_tc.top, clipped_tc.right),
+            ScreenRectVertex(x, y + h, clipped_tc.bottom, clipped_tc.left),
+            ScreenRectVertex(x + w, y + h, clipped_tc.top, clipped_tc.left),
         }};
         std::swap(h, w);
         break;
     case Layout::DisplayOrientation::LandscapeFlipped:
         vertices = {{
-            ScreenRectVertex(x, y, texcoords.top, texcoords.right),
-            ScreenRectVertex(x + w, y, texcoords.top, texcoords.left),
-            ScreenRectVertex(x, y + h, texcoords.bottom, texcoords.right),
-            ScreenRectVertex(x + w, y + h, texcoords.bottom, texcoords.left),
+            ScreenRectVertex(x, y, clipped_tc.top, clipped_tc.right),
+            ScreenRectVertex(x + w, y, clipped_tc.top, clipped_tc.left),
+            ScreenRectVertex(x, y + h, clipped_tc.bottom, clipped_tc.right),
+            ScreenRectVertex(x + w, y + h, clipped_tc.bottom, clipped_tc.left),
         }};
         break;
     case Layout::DisplayOrientation::PortraitFlipped:
         vertices = {{
-            ScreenRectVertex(x, y, texcoords.top, texcoords.left),
-            ScreenRectVertex(x + w, y, texcoords.bottom, texcoords.left),
-            ScreenRectVertex(x, y + h, texcoords.top, texcoords.right),
-            ScreenRectVertex(x + w, y + h, texcoords.bottom, texcoords.right),
+            ScreenRectVertex(x, y, clipped_tc.top, clipped_tc.left),
+            ScreenRectVertex(x + w, y, clipped_tc.bottom, clipped_tc.left),
+            ScreenRectVertex(x, y + h, clipped_tc.top, clipped_tc.right),
+            ScreenRectVertex(x + w, y + h, clipped_tc.bottom, clipped_tc.right),
         }};
         std::swap(h, w);
         break;
@@ -561,6 +599,25 @@ void RendererOpenGL::DrawSingleScreen(const ScreenInfo& screen_info, float x, fl
                 1.0f / static_cast<float>(screen_info.texture.width * scale_factor),
                 1.0f / static_cast<float>(screen_info.texture.height * scale_factor));
     glUniform4f(uniform_o_resolution, h, w, 1.0f / h, 1.0f / w);
+
+    // DiySC: Set rounded corner uniforms
+    glUniform2f(uniform_screen_origin, current_screen_x, current_screen_y);
+    glUniform1f(uniform_corner_radius, current_radius);
+    glUniform4f(uniform_bg_color, Settings::values.bg_red.GetValue() / 255.0f,
+                Settings::values.bg_green.GetValue() / 255.0f,
+                Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
+    glUniform1f(uniform_edge_blur, current_edge_blur);
+    glUniform1f(uniform_screen_opacity, current_opacity);
+    glUniform1i(uniform_vignette_enable, current_vignette_enabled ? 1 : 0);
+    if (current_vignette_enabled) {
+        glUniform3fv(uniform_vignette_color, 1, current_vignette_color.data());
+        glUniform1f(uniform_vignette_size, current_vignette_size);
+    }
+    glUniform1i(uniform_overlay_enable, current_overlay_enabled ? 1 : 0);
+    if (current_overlay_enabled) {
+        glUniform3fv(uniform_overlay_color, 1, current_overlay_color.data());
+    }
+
     state.texture_units[0].texture_2d = screen_info.display_texture;
     state.texture_units[0].sampler = sampler;
     state.Apply();
@@ -638,6 +695,41 @@ void RendererOpenGL::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
     state.texture_units[1].sampler = sampler;
     state.Apply();
 
+    // DiySC: Apply clip and radius for stereo modes
+    if (uniform_screen_origin != -1) {
+        glUniform2f(uniform_screen_origin, current_screen_x, current_screen_y);
+    }
+    if (uniform_corner_radius != -1) {
+        glUniform1f(uniform_corner_radius, current_radius);
+    }
+    if (uniform_bg_color != -1) {
+        glUniform4f(uniform_bg_color, Settings::values.bg_red.GetValue() / 255.0f,
+                    Settings::values.bg_green.GetValue() / 255.0f,
+                    Settings::values.bg_blue.GetValue() / 255.0f, 1.0f);
+    }
+    if (uniform_edge_blur != -1) {
+        glUniform1f(uniform_edge_blur, current_edge_blur);
+    }
+    if (uniform_screen_opacity != -1) {
+        glUniform1f(uniform_screen_opacity, current_opacity);
+    }
+    // Adjust texcoords for clip
+    if (current_clip_left > 0.0f || current_clip_right > 0.0f || current_clip_top > 0.0f ||
+        current_clip_bottom > 0.0f) {
+        float tex_w = texcoords.right - texcoords.left;
+        float tex_h = texcoords.bottom - texcoords.top;
+        float clip_l_norm = (current_clip_left / w) * tex_w;
+        float clip_r_norm = (current_clip_right / w) * tex_w;
+        float clip_t_norm = (current_clip_top / h) * tex_h;
+        float clip_b_norm = (current_clip_bottom / h) * tex_h;
+        for (auto& v : vertices) {
+            v.tex_coord[0] = std::clamp(v.tex_coord[0],
+                texcoords.left + clip_l_norm, texcoords.right - clip_r_norm);
+            v.tex_coord[1] = std::clamp(v.tex_coord[1],
+                texcoords.top + clip_t_norm, texcoords.bottom - clip_b_norm);
+        }
+    }
+
     glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(vertices), vertices.data());
     glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
 
@@ -651,6 +743,143 @@ void RendererOpenGL::DrawSingleScreenStereo(const ScreenInfo& screen_info_l,
 /**
  * Draws the emulated screens to the emulator window.
  */
+void RendererOpenGL::DrawBackgroundFill(const Layout::FramebufferLayout& layout, bool flipped) {
+    if (!layout.bg_blur_enabled) return;
+
+    const auto& screen_info = screen_infos[layout.bg_blur_is_bottom ? 1 : 0];
+    u32 tex_w = screen_info.texture.width;
+    u32 tex_h = screen_info.texture.height;
+
+    // Save current framebuffer so we can restore it after
+    GLint prev_fbo = 0;
+    glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_fbo);
+    GLint prev_viewport[4];
+    glGetIntegerv(GL_VIEWPORT, prev_viewport);
+
+    // Create/recreate intermediate FBO when source texture size changes
+    if (tex_w != bg_fill_last_tex_w || tex_h != bg_fill_last_tex_h) {
+        bg_fill_intermediate_texture.Release();
+        bg_fill_intermediate_fbo.Release();
+
+        bg_fill_intermediate_texture.Create();
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, bg_fill_intermediate_texture.handle);
+        // GL_RGBA8 is guaranteed color-renderable; GL_RGB8 is not on all drivers
+        glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA8, (GLsizei)tex_w, (GLsizei)tex_h,
+                     0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+        glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+
+        bg_fill_intermediate_fbo.Create();
+        glBindFramebuffer(GL_FRAMEBUFFER, bg_fill_intermediate_fbo.handle);
+        glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                               bg_fill_intermediate_texture.handle, 0);
+        auto fbo_status = glCheckFramebufferStatus(GL_FRAMEBUFFER);
+        if (fbo_status != GL_FRAMEBUFFER_COMPLETE) {
+            LOG_ERROR(Render_OpenGL, "bg_fill intermediate FBO incomplete: 0x{:X}", fbo_status);
+            bg_fill_intermediate_fbo.Release();
+            bg_fill_intermediate_texture.Release();
+            bg_fill_last_tex_w = 0;
+            bg_fill_last_tex_h = 0;
+            // Restore state and abort
+            glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+            glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+            state.draw.shader_program = shader.handle;
+            state.Apply();
+            return;
+        }
+
+        bg_fill_last_tex_w = tex_w;
+        bg_fill_last_tex_h = tex_h;
+    }
+
+    // Use the bg_fill shader for both passes
+    state.draw.shader_program = bg_fill_shader.handle;
+    state.Apply();
+
+    // ── Pass 0: Horizontal blur → intermediate FBO ──
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, bg_fill_intermediate_fbo.handle);
+        glViewport(0, 0, (GLsizei)tex_w, (GLsizei)tex_h);
+
+        std::array<GLfloat, 6> ortho = MakeOrthographicMatrix((float)tex_w, (float)tex_h, false);
+        glUniformMatrix3x2fv(bg_fill_uniform_modelview_matrix, 1, GL_FALSE, ortho.data());
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, screen_info.display_texture);
+        glUniform1i(bg_fill_uniform_color_texture, 0);
+
+        GLfloat tsize[2] = {(GLfloat)tex_w, (GLfloat)tex_h};
+        glUniform2fv(bg_fill_uniform_tex_size, 1, tsize);
+        glUniform1f(bg_fill_uniform_blur_sigma, layout.bg_blur_sigma);
+        glUniform1i(bg_fill_uniform_max_radius, layout.bg_blur_max_radius);
+        glUniform1i(bg_fill_uniform_direction, 0);
+
+        struct BgVertex { GLfloat p[2]; GLfloat t[2]; };
+        BgVertex v[4] = {
+            {{0.0f, 0.0f}, {0.0f, 0.0f}},
+            {{(GLfloat)tex_w, 0.0f}, {1.0f, 0.0f}},
+            {{0.0f, (GLfloat)tex_h}, {0.0f, 1.0f}},
+            {{(GLfloat)tex_w, (GLfloat)tex_h}, {1.0f, 1.0f}},
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    // ── Pass 1: Vertical blur + LCD rotation → original framebuffer ──
+    {
+        glBindFramebuffer(GL_FRAMEBUFFER, prev_fbo);
+        glViewport(prev_viewport[0], prev_viewport[1], prev_viewport[2], prev_viewport[3]);
+
+        // Compute centered rectangle with correct 3DS aspect ratio and zoom
+        float src_ar = layout.bg_blur_is_bottom ? (4.0f / 3.0f) : (5.0f / 3.0f);
+        float window_ar = (float)layout.width / (float)layout.height;
+        float draw_w, draw_h;
+        if (window_ar > src_ar) {
+            draw_h = (float)layout.height * layout.bg_blur_scale;
+            draw_w = draw_h * src_ar;
+        } else {
+            draw_w = (float)layout.width * layout.bg_blur_scale;
+            draw_h = draw_w / src_ar;
+        }
+        float draw_x = ((float)layout.width - draw_w) / 2.0f;
+        float draw_y = ((float)layout.height - draw_h) / 2.0f;
+
+        std::array<GLfloat, 6> ortho = MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
+        glUniformMatrix3x2fv(bg_fill_uniform_modelview_matrix, 1, GL_FALSE, ortho.data());
+
+        glActiveTexture(GL_TEXTURE0);
+        glBindTexture(GL_TEXTURE_2D, bg_fill_intermediate_texture.handle);
+        glUniform1i(bg_fill_uniform_color_texture, 0);
+
+        GLfloat tsize[2] = {(GLfloat)tex_w, (GLfloat)tex_h};
+        glUniform2fv(bg_fill_uniform_tex_size, 1, tsize);
+        glUniform1f(bg_fill_uniform_blur_sigma, layout.bg_blur_sigma);
+        glUniform1i(bg_fill_uniform_max_radius, layout.bg_blur_max_radius);
+        glUniform1f(bg_fill_uniform_darken, layout.bg_blur_darken);
+        glUniform1i(bg_fill_uniform_direction, 1);
+
+        struct BgVertex { GLfloat p[2]; GLfloat t[2]; };
+        BgVertex v[4] = {
+            {{draw_x, draw_y}, {0.0f, 0.0f}},
+            {{draw_x + draw_w, draw_y}, {1.0f, 0.0f}},
+            {{draw_x, draw_y + draw_h}, {0.0f, 1.0f}},
+            {{draw_x + draw_w, draw_y + draw_h}, {1.0f, 1.0f}},
+        };
+        glBufferSubData(GL_ARRAY_BUFFER, 0, sizeof(v), v);
+        glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+    }
+
+    // Restore main shader
+    state.draw.shader_program = shader.handle;
+    state.Apply();
+    std::array<GLfloat, 6> ortho = MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
+    glUniformMatrix3x2fv(uniform_modelview_matrix, 1, GL_FALSE, ortho.data());
+    glUniform1i(uniform_color_texture, 0);
+}
+
 void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool flipped) {
     if (settings.bg_color_update_requested.exchange(false)) {
         // Update background color before drawing
@@ -661,6 +890,7 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     if (settings.shader_update_requested.exchange(false)) {
         // Update fragment shader before drawing
         shader.Release();
+        bg_fill_shader.Release();
         // Link shaders and get variable locations
         ReloadShader(layout.render_3d_mode);
     }
@@ -677,6 +907,18 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     std::array<GLfloat, 3 * 2> ortho_matrix =
         MakeOrthographicMatrix((float)layout.width, (float)layout.height, flipped);
     glUniformMatrix3x2fv(uniform_modelview_matrix, 1, GL_FALSE, ortho_matrix.data());
+
+    // DiySC: Draw background blur fill first (behind screens, no clearing)
+    // Only toggle blend enable (bg fill is opaque); don't disturb other state
+    if (layout.bg_blur_enabled) {
+        bool prev_blend = state.blend.enabled;
+        state.blend.enabled = false;
+        state.Apply();
+        DrawBackgroundFill(layout, flipped);
+        state.blend.enabled = prev_blend;
+        state.Apply();
+        glUniformMatrix3x2fv(uniform_modelview_matrix, 1, GL_FALSE, ortho_matrix.data());
+    }
 
     // Bind texture in Texture Unit 0
     glUniform1i(uniform_color_texture, 0);
@@ -695,11 +937,13 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
     if (!Settings::values.swap_screen.GetValue()) {
         DrawTopScreen(layout, top_screen);
         glUniform1i(uniform_layer, 0);
+        current_opacity = layout.bottom_opacity;
         ApplySecondLayerOpacity(layout.bottom_opacity);
         DrawBottomScreen(layout, bottom_screen);
     } else {
         DrawBottomScreen(layout, bottom_screen);
         glUniform1i(uniform_layer, 0);
+        current_opacity = layout.top_opacity;
         ApplySecondLayerOpacity(layout.top_opacity);
         DrawTopScreen(layout, top_screen);
     }
@@ -716,16 +960,20 @@ void RendererOpenGL::DrawScreens(const Layout::FramebufferLayout& layout, bool f
 }
 
 void RendererOpenGL::ApplySecondLayerOpacity(float opacity) {
-    state.blend.src_rgb_func = GL_CONSTANT_ALPHA;
-    state.blend.src_a_func = GL_CONSTANT_ALPHA;
-    state.blend.dst_a_func = GL_ONE_MINUS_CONSTANT_ALPHA;
-    state.blend.dst_rgb_func = GL_ONE_MINUS_CONSTANT_ALPHA;
-    state.blend.color.alpha = opacity;
+    // DiySC: Use per-pixel alpha blending for soft edges and rounded corners
+    state.blend.src_rgb_func = GL_SRC_ALPHA;
+    state.blend.dst_rgb_func = GL_ONE_MINUS_SRC_ALPHA;
+    state.blend.src_a_func = GL_ONE;
+    state.blend.dst_a_func = GL_ZERO;
+    state.blend.color.alpha = 0.0f;
+    // Global opacity is passed as uniform and multiplied in shader
+    // Set via current_opacity in DrawTopScreen/DrawBottomScreen
 }
 
 void RendererOpenGL::ResetSecondLayerOpacity() {
-    state.blend.src_rgb_func = GL_ONE;
-    state.blend.dst_rgb_func = GL_ZERO;
+    // DiySC: Use per-pixel alpha even for first layer (for rounded corners)
+    state.blend.src_rgb_func = GL_SRC_ALPHA;
+    state.blend.dst_rgb_func = GL_ONE_MINUS_SRC_ALPHA;
     state.blend.src_a_func = GL_ONE;
     state.blend.dst_a_func = GL_ZERO;
     state.blend.color.alpha = 0.0f;
@@ -736,12 +984,29 @@ void RendererOpenGL::DrawTopScreen(const Layout::FramebufferLayout& layout,
     if (!layout.top_screen_enabled) {
         return;
     }
+
+    // DiySC: Set current per-screen clip and radius state
+    current_clip_left = layout.top_clip_left;
+    current_clip_right = layout.top_clip_right;
+    current_clip_top = layout.top_clip_top;
+    current_clip_bottom = layout.top_clip_bottom;
+    current_radius = layout.top_radius;
+    current_edge_blur = layout.top_edge_blur;
+    current_opacity = 1.0f; // First layer is always fully opaque
+    current_vignette_enabled = layout.top_vignette_enabled;
+    current_vignette_color = layout.top_vignette_color;
+    current_vignette_size = layout.top_vignette_size;
+    current_overlay_enabled = layout.top_overlay_enabled;
+    current_overlay_color = layout.top_overlay_color;
+    current_screen_x = static_cast<float>(top_screen.left) + layout.top_offset_x;
+    current_screen_y = static_cast<float>(top_screen.top) + layout.top_offset_y;
+
     int leftside, rightside;
     leftside = Settings::values.swap_eyes_3d.GetValue() ? 1 : 0;
     rightside = Settings::values.swap_eyes_3d.GetValue() ? 0 : 1;
 
-    const float top_screen_left = static_cast<float>(top_screen.left);
-    const float top_screen_top = static_cast<float>(top_screen.top);
+    const float top_screen_left = static_cast<float>(top_screen.left) + layout.top_offset_x;
+    const float top_screen_top = static_cast<float>(top_screen.top) + layout.top_offset_y;
     const float top_screen_width = static_cast<float>(top_screen.GetWidth());
     const float top_screen_height = static_cast<float>(top_screen.GetHeight());
 
@@ -798,8 +1063,23 @@ void RendererOpenGL::DrawBottomScreen(const Layout::FramebufferLayout& layout,
         return;
     }
 
-    const float bottom_screen_left = static_cast<float>(bottom_screen.left);
-    const float bottom_screen_top = static_cast<float>(bottom_screen.top);
+    // DiySC: Set current per-screen clip and radius state
+    current_clip_left = layout.bot_clip_left;
+    current_clip_right = layout.bot_clip_right;
+    current_clip_top = layout.bot_clip_top;
+    current_clip_bottom = layout.bot_clip_bottom;
+    current_radius = layout.bot_radius;
+    current_edge_blur = layout.bot_edge_blur;
+    current_vignette_enabled = layout.bot_vignette_enabled;
+    current_vignette_color = layout.bot_vignette_color;
+    current_vignette_size = layout.bot_vignette_size;
+    current_overlay_enabled = layout.bot_overlay_enabled;
+    current_overlay_color = layout.bot_overlay_color;
+    current_screen_x = static_cast<float>(bottom_screen.left) + layout.bot_offset_x;
+    current_screen_y = static_cast<float>(bottom_screen.top) + layout.bot_offset_y;
+
+    const float bottom_screen_left = static_cast<float>(bottom_screen.left) + layout.bot_offset_x;
+    const float bottom_screen_top = static_cast<float>(bottom_screen.top) + layout.bot_offset_y;
     const float bottom_screen_width = static_cast<float>(bottom_screen.GetWidth());
     const float bottom_screen_height = static_cast<float>(bottom_screen.GetHeight());
 
@@ -881,6 +1161,156 @@ void RendererOpenGL::TryPresent(int timeout_ms, bool is_secondary) {
     glBindFramebuffer(GL_READ_FRAMEBUFFER, frame->present.handle);
     glBlitFramebuffer(0, 0, frame->width, frame->height, 0, 0, layout.width, layout.height,
                       GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+    // ── Multi-filter stacking: collect active filters ──
+    {
+        std::vector<std::string> active_filters;
+        auto add_filter = [&](const std::string& name) {
+            if (!name.empty() && name != "None (builtin)" && name != "None")
+                active_filters.push_back(name);
+        };
+        add_filter(Settings::values.pp_shader_name.GetValue());
+        add_filter(Settings::values.pp_shader_name_2.GetValue());
+        add_filter(Settings::values.pp_shader_name_3.GetValue());
+        add_filter(Settings::values.pp_shader_name_4.GetValue());
+        add_filter(Settings::values.pp_shader_name_5.GetValue());
+        add_filter(Settings::values.pp_shader_name_6.GetValue());
+        add_filter(Settings::values.pp_shader_name_7.GetValue());
+        add_filter(Settings::values.pp_shader_name_8.GetValue());
+        add_filter(Settings::values.pp_shader_name_9.GetValue());
+        add_filter(Settings::values.pp_shader_name_10.GetValue());
+
+        if (active_filters.size() > 1) {
+            GLint prev_read_fbo = 0, prev_draw_fbo = 0;
+            glGetIntegerv(GL_READ_FRAMEBUFFER_BINDING, &prev_read_fbo);
+            glGetIntegerv(GL_DRAW_FRAMEBUFFER_BINDING, &prev_draw_fbo);
+
+            // Ensure ping-pong FBOs exist at output resolution
+            if (filter_fbo_w != (u32)layout.width || filter_fbo_h != (u32)layout.height) {
+                filter_tex_a.Release();
+                filter_fbo_a.Release();
+                filter_tex_b.Release();
+                filter_fbo_b.Release();
+
+                auto create_fbo = [&](OGLTexture& tex, OGLFramebuffer& fbo) {
+                    tex.Create();
+                    glActiveTexture(GL_TEXTURE0);
+                    glBindTexture(GL_TEXTURE_2D, tex.handle);
+                    glTexImage2D(GL_TEXTURE_2D, 0, GL_RGBA, layout.width, layout.height, 0,
+                                 GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MIN_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_MAG_FILTER, GL_LINEAR);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
+                    glTexParameteri(GL_TEXTURE_2D, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
+                    fbo.Create();
+                    glBindFramebuffer(GL_FRAMEBUFFER, fbo.handle);
+                    glFramebufferTexture2D(GL_FRAMEBUFFER, GL_COLOR_ATTACHMENT0, GL_TEXTURE_2D,
+                                           tex.handle, 0);
+                    glBindFramebuffer(GL_FRAMEBUFFER, 0);
+                };
+                create_fbo(filter_tex_a, filter_fbo_a);
+                create_fbo(filter_tex_b, filter_fbo_b);
+                filter_fbo_w = layout.width;
+                filter_fbo_h = layout.height;
+            }
+
+            // Blit default framebuffer → FBO A (capture combined screen output)
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, filter_fbo_a.handle);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, 0);
+            glBlitFramebuffer(0, 0, layout.width, layout.height, 0, 0,
+                              layout.width, layout.height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+            // Prepare a simple fullscreen blit shader for filter passes
+            if (filter_pass_shader.handle == 0) {
+                std::string vert = fragment_shader_precision_OES;
+                vert += R"(
+layout(location = 0) in vec2 vert_position;
+layout(location = 1) in vec2 vert_tex_coord;
+layout(location = 0) out vec2 frag_tex_coord;
+layout(location = 1) out vec2 frag_position;
+void main() {
+    frag_tex_coord = vert_tex_coord;
+    frag_position = vert_position;
+    gl_Position = vec4(vert_tex_coord * 2.0 - 1.0, 0.0, 1.0);
+}
+)";
+                filter_pass_shader.Create(vert.c_str(), nullptr);
+            }
+
+            // Ping-pong through each filter
+            OGLFramebuffer* src = &filter_fbo_a;
+            OGLFramebuffer* dst = &filter_fbo_b;
+            OGLTexture* src_tex = &filter_tex_a;
+
+            // Fullscreen quad vertex + texcoord (triangle strip: 4 vertices)
+            const float quad_verts[] = {
+                -1.0f, -1.0f, 0.0f, 1.0f,   // bottom-left
+                 1.0f, -1.0f, 1.0f, 1.0f,   // bottom-right
+                -1.0f,  1.0f, 0.0f, 0.0f,   // top-left
+                 1.0f,  1.0f, 1.0f, 0.0f,   // top-right
+            };
+
+            for (size_t fi = 0; fi < active_filters.size(); fi++) {
+                std::string shader_text = OpenGL::GetPostProcessingShaderCode(
+                    false, active_filters[fi]);
+                if (shader_text.empty()) continue;
+
+                std::string full_frag = fragment_shader_precision_OES + shader_text;
+                std::string vert_src =
+                    fragment_shader_precision_OES + std::string(R"(
+layout(location = 0) in vec2 vert_position;
+layout(location = 1) in vec2 vert_tex_coord;
+layout(location = 0) out vec2 frag_tex_coord;
+layout(location = 1) out vec2 frag_position;
+void main() {
+    frag_tex_coord = vert_tex_coord;
+    frag_position = vert_position * 0.5 + 0.5; // [-1,1] → [0,1]
+    gl_Position = vec4(vert_position, 0.0, 1.0);
+}
+)");
+                OGLProgram filter_prog;
+                filter_prog.Create(vert_src.c_str(), full_frag.c_str());
+
+                glUseProgram(filter_prog.handle);
+                glUniform1i(glGetUniformLocation(filter_prog.handle, "color_texture"), 0);
+                GLint ires_loc = glGetUniformLocation(filter_prog.handle, "i_resolution");
+                GLint ores_loc = glGetUniformLocation(filter_prog.handle, "o_resolution");
+                if (ires_loc >= 0)
+                    glUniform4f(ires_loc, (float)layout.width, (float)layout.height,
+                                1.0f / layout.width, 1.0f / layout.height);
+                if (ores_loc >= 0)
+                    glUniform4f(ores_loc, (float)layout.width, (float)layout.height,
+                                1.0f / layout.width, 1.0f / layout.height);
+
+                glBindFramebuffer(GL_FRAMEBUFFER, dst->handle);
+                glViewport(0, 0, layout.width, layout.height);
+                glActiveTexture(GL_TEXTURE0);
+                glBindTexture(GL_TEXTURE_2D, src_tex->handle);
+                glClear(GL_COLOR_BUFFER_BIT);
+
+                // Set up fullscreen quad vertex attribs inline
+                glVertexAttribPointer(0, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                                      quad_verts);
+                glVertexAttribPointer(1, 2, GL_FLOAT, GL_FALSE, 4 * sizeof(float),
+                                      quad_verts + 2);
+                glEnableVertexAttribArray(0);
+                glEnableVertexAttribArray(1);
+                glDrawArrays(GL_TRIANGLE_STRIP, 0, 4);
+
+                std::swap(src, dst);
+                src_tex = (src == &filter_fbo_a) ? &filter_tex_a : &filter_tex_b;
+            }
+
+            // Blit final result back to default framebuffer
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, 0);
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, src->handle);
+            glBlitFramebuffer(0, 0, layout.width, layout.height, 0, 0,
+                              layout.width, layout.height, GL_COLOR_BUFFER_BIT, GL_LINEAR);
+
+            glBindFramebuffer(GL_READ_FRAMEBUFFER, prev_read_fbo);
+            glBindFramebuffer(GL_DRAW_FRAMEBUFFER, prev_draw_fbo);
+        }
+    }
 
     // Delete the fence if we're re-presenting to avoid leaking fences
     if (frame->present_fence) {

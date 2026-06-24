@@ -83,6 +83,12 @@
             <bool>false</bool>
            </property>
            <layout class="QGridLayout" name="gridLayout_3">
+            <property name="spacing">
+             <number>4</number>
+            </property>
+            <property name="verticalSpacing">
+             <number>2</number>
+            </property>
             <item row="1" column="1">
              <layout class="QVBoxLayout" name="verticalLayout_16">
               <item>
@@ -344,6 +350,12 @@
             <bool>false</bool>
            </property>
            <layout class="QGridLayout" name="gridLayout_6">
+            <property name="spacing">
+             <number>4</number>
+            </property>
+            <property name="verticalSpacing">
+             <number>2</number>
+            </property>
             <item row="0" column="0">
              <layout class="QVBoxLayout" name="verticalLayout_25">
               <item>
@@ -1054,6 +1066,16 @@
       <widget class="QCheckBox" name="use_artic_controller">
        <property name="text">
         <string>Use Artic Controller when connected to Artic Base Server</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QCheckBox" name="use_adaptive_controller_mapping">
+       <property name="text">
+        <string>Adaptive Button Mapping (cross-controller compatible)</string>
+       </property>
+       <property name="checked">
+        <bool>true</bool>
        </property>
       </widget>
      </item>

@@ -252,6 +252,10 @@ void EmuWindow::UpdateCurrentFramebufferLayout(u32 width, u32 height, bool is_po
             layout = Layout::CustomFrameLayout(
                 width, height, Settings::values.swap_screen.GetValue(), is_portrait_mode);
             break;
+        case Settings::LayoutOption::CustomLayoutPercent:
+            layout = Layout::CustomPercentFrameLayout(
+                width, height, Settings::values.swap_screen.GetValue());
+            break;
         case Settings::LayoutOption::SingleScreen:
             layout =
                 Layout::SingleFrameLayout(width, height, Settings::values.swap_screen.GetValue(),

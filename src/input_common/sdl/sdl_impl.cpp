@@ -3,6 +3,7 @@
 // Refer to the license.txt file included.
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <functional>
@@ -154,6 +155,16 @@ public:
         : guid{std::move(guid_)}, port{port_}, sdl_joystick{joystick, &SDL_JoystickClose},
           sdl_controller{game_controller, &SDL_GameControllerClose} {
         EnableMotion();
+        if (sdl_controller) {
+            for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++) {
+                gc_bindings[b] = SDL_GameControllerGetBindForButton(
+                    sdl_controller.get(), static_cast<SDL_GameControllerButton>(b));
+            }
+            for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX; a++) {
+                gc_axis_bindings[a] = SDL_GameControllerGetBindForAxis(
+                    sdl_controller.get(), static_cast<SDL_GameControllerAxis>(a));
+            }
+        }
     }
 
     void EnableMotion() {
@@ -299,6 +310,10 @@ private:
     std::unique_ptr<SDL_Joystick, decltype(&SDL_JoystickClose)> sdl_joystick;
     std::unique_ptr<SDL_GameController, decltype(&SDL_GameControllerClose)> sdl_controller;
     mutable std::mutex mutex;
+
+    // Raw SDL bindings array for reverse lookup
+    std::array<SDL_GameControllerButtonBind, SDL_CONTROLLER_BUTTON_MAX> gc_bindings;
+    std::array<SDL_GameControllerButtonBind, SDL_CONTROLLER_AXIS_MAX> gc_axis_bindings;
 };
 
 struct SDLGameControllerDeleter {
@@ -382,6 +397,56 @@ std::shared_ptr<SDLJoystick> SDLState::GetSDLJoystickBySDLID(SDL_JoystickID sdl_
     }
 
     return *vec_it;
+}
+
+std::shared_ptr<SDLJoystick> SDLState::GetSDLJoystickByVirtualPort(int port) {
+    std::lock_guard lock{virtual_port_mutex};
+    if (port >= 0 && port < static_cast<int>(virtual_port_guids.size())) {
+        return GetSDLJoystickByGUID(virtual_port_guids[port], 0);
+    }
+    // Fallback: return first connected controller
+    std::lock_guard lock2{joystick_map_mutex};
+    for (auto& [guid, joysticks] : joystick_map) {
+        for (auto& j : joysticks) {
+            if (j->GetSDLGameController()) {
+                return j;
+            }
+        }
+    }
+    return nullptr;
+}
+
+int SDLState::GetOrAssignVirtualPort(const std::string& guid) {
+    std::lock_guard lock{virtual_port_mutex};
+    auto it = std::find(virtual_port_guids.begin(), virtual_port_guids.end(), guid);
+    if (it != virtual_port_guids.end()) {
+        return static_cast<int>(std::distance(virtual_port_guids.begin(), it));
+    }
+    int port = static_cast<int>(virtual_port_guids.size());
+    virtual_port_guids.push_back(guid);
+    return port;
+}
+
+void SDLState::BuildReverseBindMap(SDL_GameController* gc) {
+    if (!gc) return;
+    physical_button_to_virtual.clear();
+    physical_axis_to_virtual_btn.clear();
+    physical_hat_to_virtual.clear();
+
+    for (int b = 0; b < SDL_CONTROLLER_BUTTON_MAX; b++) {
+        auto bind = SDL_GameControllerGetBindForButton(gc, static_cast<SDL_GameControllerButton>(b));
+        if (bind.bindType == SDL_CONTROLLER_BINDTYPE_BUTTON) {
+            physical_button_to_virtual[bind.value.button] = static_cast<SDL_GameControllerButton>(b);
+        } else if (bind.bindType == SDL_CONTROLLER_BINDTYPE_AXIS) {
+            // SDL controller axis→button bindings are always positive-direction
+            // (e.g., lefttrigger:a4 means axis 4 > threshold fires the button)
+            int key = (bind.value.axis & 0xFFFF) | (1 << 16);
+            physical_axis_to_virtual_btn[key] = static_cast<SDL_GameControllerButton>(b);
+        } else if (bind.bindType == SDL_CONTROLLER_BINDTYPE_HAT) {
+            int key = (bind.value.hat.hat << 4) | bind.value.hat.hat_mask;
+            physical_hat_to_virtual[key] = static_cast<SDL_GameControllerButton>(b);
+        }
+    }
 }
 
 Common::ParamPackage SDLState::GetSDLControllerButtonBindByGUID(
@@ -524,6 +589,10 @@ void SDLState::InitJoystick(int joystick_index) {
         auto joystick = std::make_shared<SDLJoystick>(guid, 0, sdl_joystick, sdl_gamecontroller);
         joystick->EnableMotion();
         joystick_map[guid].emplace_back(std::move(joystick));
+        if (sdl_gamecontroller) {
+            GetOrAssignVirtualPort(guid);
+            BuildReverseBindMap(sdl_gamecontroller);
+        }
         return;
     }
 
@@ -533,12 +602,20 @@ void SDLState::InitJoystick(int joystick_index) {
     if (it != joystick_guid_list.end()) {
         (*it)->SetSDLJoystick(sdl_joystick, sdl_gamecontroller);
         (*it)->EnableMotion();
+        if (sdl_gamecontroller) {
+            GetOrAssignVirtualPort(guid);
+            BuildReverseBindMap(sdl_gamecontroller);
+        }
         return;
     }
     const int port = static_cast<int>(joystick_guid_list.size());
     auto joystick = std::make_shared<SDLJoystick>(guid, port, sdl_joystick, sdl_gamecontroller);
     joystick->EnableMotion();
     joystick_guid_list.emplace_back(std::move(joystick));
+    if (sdl_gamecontroller) {
+        GetOrAssignVirtualPort(guid);
+        BuildReverseBindMap(sdl_gamecontroller);
+    }
 }
 
 void SDLState::CloseJoystick(SDL_Joystick* sdl_joystick) {
@@ -671,7 +748,7 @@ public:
         float axis_value = joystick->GetAxis(axis);
         if (trigger_if_greater)
             return axis_value > threshold;
-        return axis_value < threshold;
+        return axis_value < -threshold;
     }
 
 private:
@@ -751,6 +828,83 @@ public:
      * value is smaller than the threshold
      */
     std::unique_ptr<Input::ButtonDevice> Create(const Common::ParamPackage& params) override {
+        // Virtual controller mode (cross-controller compatible)
+        if (params.Has("gc_button")) {
+            int gc_button_val = params.Get("gc_button", 0);
+            int port = params.Get("port", 0);
+            auto joystick = state.GetSDLJoystickByVirtualPort(port);
+            if (!joystick) {
+                // Fallback: try GUID lookup
+                const std::string guid_fallback = params.Get("guid", "0");
+                joystick = state.GetSDLJoystickByGUID(guid_fallback, port);
+            }
+            if (joystick) {
+                auto* gc = joystick->GetSDLGameController();
+                if (gc) {
+                    auto bind = SDL_GameControllerGetBindForButton(gc, static_cast<SDL_GameControllerButton>(gc_button_val));
+                    switch (bind.bindType) {
+                    case SDL_CONTROLLER_BINDTYPE_BUTTON:
+                        joystick->SetButton(bind.value.button, false);
+                        return std::make_unique<SDLButton>(joystick, bind.value.button);
+                    case SDL_CONTROLLER_BINDTYPE_AXIS: {
+                        int axis = bind.value.axis;
+                        // SDL controller axis→button bindings are always positive-going
+                        float threshold = 0.5f;
+                        bool greater = true;
+                        joystick->SetAxis(axis, 0);
+                        return std::make_unique<SDLAxisButton>(joystick, axis, threshold, greater);
+                    }
+                    case SDL_CONTROLLER_BINDTYPE_HAT: {
+                        int hat = bind.value.hat.hat;
+                        Uint8 dir = bind.value.hat.hat_mask;
+                        joystick->SetHat(hat, SDL_HAT_CENTERED);
+                        return std::make_unique<SDLDirectionButton>(joystick, hat, dir);
+                    }
+                    default:
+                        break;
+                    }
+                }
+            }
+            // Fallback to raw if GC not available
+            const std::string guid_fallback = params.Get("guid", "0");
+            joystick = state.GetSDLJoystickByGUID(guid_fallback, port);
+            joystick->SetButton(params.Get("button", 0), false);
+            return std::make_unique<SDLButton>(joystick, params.Get("button", 0));
+        }
+        // ==== end gc_button virtual mode ====
+
+        // Virtual controller mode for axes (e.g. trigger axes → ZL/ZR)
+        if (params.Has("gc_axis")) {
+            int gc_axis_val = params.Get("gc_axis", 0);
+            int port = params.Get("port", 0);
+            auto joystick = state.GetSDLJoystickByVirtualPort(port);
+            if (!joystick) {
+                const std::string guid_fallback = params.Get("guid", "0");
+                joystick = state.GetSDLJoystickByGUID(guid_fallback, port);
+            }
+            if (joystick) {
+                auto* gc = joystick->GetSDLGameController();
+                if (gc) {
+                    auto bind = SDL_GameControllerGetBindForAxis(
+                        gc, static_cast<SDL_GameControllerAxis>(gc_axis_val));
+                    if (bind.bindType == SDL_CONTROLLER_BINDTYPE_AXIS) {
+                        int axis = bind.value.axis;
+                        float threshold = std::clamp(params.Get("threshold", 0.5f), -1.0f, 1.0f);
+                        std::string dir = params.Get("direction", "+");
+                        bool greater = (dir == "+");
+                        joystick->SetAxis(axis, 0);
+                        return std::make_unique<SDLAxisButton>(joystick, axis, threshold, greater);
+                    }
+                }
+            }
+            // Fallback to raw
+            const std::string guid_fallback = params.Get("guid", "0");
+            joystick = state.GetSDLJoystickByGUID(guid_fallback, port);
+            joystick->SetButton(params.Get("button", 0), false);
+            return std::make_unique<SDLButton>(joystick, params.Get("button", 0));
+        }
+        // ==== end gc_axis virtual mode ====
+
         const std::string guid = params.Get("guid", "0");
         const int port = params.Get("port", 0);
 
@@ -817,6 +971,33 @@ public:
      *     - "axis_y": the index of the axis to be bind as y-axis
      */
     std::unique_ptr<Input::AnalogDevice> Create(const Common::ParamPackage& params) override {
+        // Virtual controller mode
+        if (params.Has("gc_axis_x") && params.Has("gc_axis_y")) {
+            int port = params.Get("port", 0);
+            auto joystick = state.GetSDLJoystickByVirtualPort(port);
+            if (!joystick) {
+                joystick = state.GetSDLJoystickByGUID(params.Get("guid", "0"), port);
+            }
+            if (joystick) {
+                auto* gc = joystick->GetSDLGameController();
+                if (gc) {
+                    int gc_axis_x_val = params.Get("gc_axis_x", 0);
+                    int gc_axis_y_val = params.Get("gc_axis_y", 1);
+                    auto bind_x = SDL_GameControllerGetBindForAxis(gc, static_cast<SDL_GameControllerAxis>(gc_axis_x_val));
+                    auto bind_y = SDL_GameControllerGetBindForAxis(gc, static_cast<SDL_GameControllerAxis>(gc_axis_y_val));
+                    if (bind_x.bindType == SDL_CONTROLLER_BINDTYPE_AXIS && bind_y.bindType == SDL_CONTROLLER_BINDTYPE_AXIS) {
+                        int axis_x = bind_x.value.axis;
+                        int axis_y = bind_y.value.axis;
+                        float deadzone = std::clamp(params.Get("deadzone", 0.0f), 0.0f, .99f);
+                        joystick->SetAxis(axis_x, 0);
+                        joystick->SetAxis(axis_y, 0);
+                        return std::make_unique<SDLAnalog>(joystick, axis_x, axis_y, deadzone);
+                    }
+                }
+            }
+        }
+        // ==== end virtual mode ====
+
         const std::string guid = params.Get("guid", "0");
         const int port = params.Get("port", 0);
         const int axis_x = params.Get("axis_x", 0);
@@ -841,10 +1022,14 @@ public:
 
     std::unique_ptr<Input::MotionDevice> Create(const Common::ParamPackage& params) override {
         const std::string guid = params.Get("guid", "0");
-        const int port = params.Get("port", 0);
+        int port = params.Get("port", 0);
+
+        if (guid == "0" || guid.empty()) {
+            auto joystick = state.GetSDLJoystickByVirtualPort(port);
+            if (joystick) return std::make_unique<SDLMotion>(joystick);
+        }
 
         auto joystick = state.GetSDLJoystickByGUID(guid, port);
-
         return std::make_unique<SDLMotion>(joystick);
     }
 
@@ -1088,8 +1273,73 @@ public:
                     }
                 }
             case SDL_JOYBUTTONUP:
-            case SDL_JOYHATMOTION:
-                return SDLEventToButtonParamPackage(state, event);
+            case SDL_JOYHATMOTION: {
+                auto pkg = SDLEventToButtonParamPackage(state, event);
+                if (pkg.Has("engine") && Settings::values.use_adaptive_controller_mapping.GetValue()) {
+                    auto joystick = state.GetSDLJoystickBySDLID(
+                        event.type == SDL_JOYAXISMOTION ? event.jaxis.which :
+                        event.type == SDL_JOYBUTTONUP ? event.jbutton.which : event.jhat.which);
+                    if (joystick && joystick->GetSDLGameController()) {
+                        state.BuildReverseBindMap(joystick->GetSDLGameController());
+
+                        // Convert to gc_button
+                        if (pkg.Has("button")) {
+                            auto it = state.physical_button_to_virtual.find(pkg.Get("button", -1));
+                            if (it != state.physical_button_to_virtual.end()) {
+                                pkg.Erase("button");
+                                pkg.Erase("guid");
+                                pkg.Set("gc_button", static_cast<int>(it->second));
+                                return pkg;
+                            }
+                        } else if (pkg.Has("axis")) {
+                            int axis = pkg.Get("axis", -1);
+                            int direction_sign = (pkg.Get("direction", "+") == "+") ? 1 : 0;
+                            int key = (axis & 0xFFFF) | (direction_sign << 16);
+                            auto it = state.physical_axis_to_virtual_btn.find(key);
+                            if (it != state.physical_axis_to_virtual_btn.end()) {
+                                pkg.Erase("axis");
+                                pkg.Erase("guid");
+                                pkg.Erase("direction");
+                                pkg.Erase("threshold");
+                                pkg.Set("gc_button", static_cast<int>(it->second));
+                                return pkg;
+                            }
+                            // Axis not mapped to a button → try mapping to a GC axis (triggers)
+                            auto* gc = joystick->GetSDLGameController();
+                            for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX; a++) {
+                                auto gc_bind = SDL_GameControllerGetBindForAxis(
+                                    gc, static_cast<SDL_GameControllerAxis>(a));
+                                if (gc_bind.bindType == SDL_CONTROLLER_BINDTYPE_AXIS &&
+                                    gc_bind.value.axis == axis) {
+                                    pkg.Erase("axis");
+                                    pkg.Erase("guid");
+                                    pkg.Set("gc_axis", a);
+                                    // Preserve direction and threshold for trigger press detection
+                                    return pkg;
+                                }
+                            }
+                        } else if (pkg.Has("hat")) {
+                            int hat = pkg.Get("hat", -1);
+                            std::string dir_str = pkg.Get("direction", "");
+                            Uint8 dir = 0;
+                            if (dir_str == "up") dir = SDL_HAT_UP;
+                            else if (dir_str == "down") dir = SDL_HAT_DOWN;
+                            else if (dir_str == "left") dir = SDL_HAT_LEFT;
+                            else if (dir_str == "right") dir = SDL_HAT_RIGHT;
+                            int key = (hat << 4) | dir;
+                            auto it = state.physical_hat_to_virtual.find(key);
+                            if (it != state.physical_hat_to_virtual.end()) {
+                                pkg.Erase("hat");
+                                pkg.Erase("guid");
+                                pkg.Erase("direction");
+                                pkg.Set("gc_button", static_cast<int>(it->second));
+                                return pkg;
+                            }
+                        }
+                    }
+                }
+                return pkg;
+            }
             }
         }
         return {};
@@ -1144,6 +1394,28 @@ public:
             params.Set("guid", joystick->GetGUID());
             params.Set("axis_x", analog_xaxis);
             params.Set("axis_y", analog_yaxis);
+            if (Settings::values.use_adaptive_controller_mapping.GetValue()) {
+                auto joystick = state.GetSDLJoystickBySDLID(analog_axes_joystick);
+                if (joystick && joystick->GetSDLGameController()) {
+                    // Map physical axes to SDL_GameControllerAxis
+                    auto* gc = joystick->GetSDLGameController();
+                    int gc_x = -1, gc_y = -1;
+                    for (int a = 0; a < SDL_CONTROLLER_AXIS_MAX; a++) {
+                        auto bind = SDL_GameControllerGetBindForAxis(gc, static_cast<SDL_GameControllerAxis>(a));
+                        if (bind.bindType == SDL_CONTROLLER_BINDTYPE_AXIS) {
+                            if (bind.value.axis == analog_xaxis) gc_x = a;
+                            if (bind.value.axis == analog_yaxis) gc_y = a;
+                        }
+                    }
+                    if (gc_x >= 0 && gc_y >= 0) {
+                        params.Erase("axis_x");
+                        params.Erase("axis_y");
+                        params.Erase("guid");
+                        params.Set("gc_axis_x", gc_x);
+                        params.Set("gc_axis_y", gc_y);
+                    }
+                }
+            }
             analog_xaxis = -1;
             analog_yaxis = -1;
             analog_axes_joystick = -1;

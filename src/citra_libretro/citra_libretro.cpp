@@ -146,50 +146,35 @@ static void UpdateSettings() {
     // Hardcode buttons to bind to libretro - it is entirely redundant to have
     //  two methods of rebinding controls.
     // Citra: A = RETRO_DEVICE_ID_JOYPAD_A (8)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::A] =
-        "button:8,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::A].push_back("button:8,joystick:0,engine:libretro");
     // Citra: B = RETRO_DEVICE_ID_JOYPAD_B (0)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::B] =
-        "button:0,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::B].push_back("button:0,joystick:0,engine:libretro");
     // Citra: X = RETRO_DEVICE_ID_JOYPAD_X (9)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::X] =
-        "button:9,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::X].push_back("button:9,joystick:0,engine:libretro");
     // Citra: Y = RETRO_DEVICE_ID_JOYPAD_Y (1)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Y] =
-        "button:1,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Y].push_back("button:1,joystick:0,engine:libretro");
     // Citra: UP = RETRO_DEVICE_ID_JOYPAD_UP (4)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Up] =
-        "button:4,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Up].push_back("button:4,joystick:0,engine:libretro");
     // Citra: DOWN = RETRO_DEVICE_ID_JOYPAD_DOWN (5)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Down] =
-        "button:5,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Down].push_back("button:5,joystick:0,engine:libretro");
     // Citra: LEFT = RETRO_DEVICE_ID_JOYPAD_LEFT (6)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Left] =
-        "button:6,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Left].push_back("button:6,joystick:0,engine:libretro");
     // Citra: RIGHT = RETRO_DEVICE_ID_JOYPAD_RIGHT (7)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Right] =
-        "button:7,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Right].push_back("button:7,joystick:0,engine:libretro");
     // Citra: L = RETRO_DEVICE_ID_JOYPAD_L (10)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::L] =
-        "button:10,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::L].push_back("button:10,joystick:0,engine:libretro");
     // Citra: R = RETRO_DEVICE_ID_JOYPAD_R (11)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::R] =
-        "button:11,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::R].push_back("button:11,joystick:0,engine:libretro");
     // Citra: START = RETRO_DEVICE_ID_JOYPAD_START (3)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Start] =
-        "button:3,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Start].push_back("button:3,joystick:0,engine:libretro");
     // Citra: SELECT = RETRO_DEVICE_ID_JOYPAD_SELECT (2)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Select] =
-        "button:2,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Select].push_back("button:2,joystick:0,engine:libretro");
     // Citra: ZL = RETRO_DEVICE_ID_JOYPAD_L2 (12)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::ZL] =
-        "button:12,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::ZL].push_back("button:12,joystick:0,engine:libretro");
     // Citra: ZR = RETRO_DEVICE_ID_JOYPAD_R2 (13)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::ZR] =
-        "button:13,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::ZR].push_back("button:13,joystick:0,engine:libretro");
     // Citra: HOME = RETRO_DEVICE_ID_JOYPAD_L3 (as per above bindings) (14)
-    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Home] =
-        "button:14,joystick:0,engine:libretro";
+    Settings::values.current_input_profile.buttons[Settings::NativeButton::Values::Home].push_back("button:14,joystick:0,engine:libretro");
 
     // Circle Pad
     Settings::values.current_input_profile.analogs[0] = "axis:0,joystick:0,engine:libretro";

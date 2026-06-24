@@ -11,12 +11,15 @@
 #include "citra_qt/configuration/config.h"
 #include "citra_qt/setting_qkeys.h"
 #include "common/file_util.h"
+#include "common/param_package.h"
 #include "common/settings.h"
 #include "core/hle/service/service.h"
 #include "input_common/main.h"
 #include "input_common/udp/client.h"
 #include "network/network.h"
 #include "network/network_settings.h"
+
+
 
 QtConfig::QtConfig(const std::string& config_name, ConfigType config_type) : type{config_type} {
     global = config_type == ConfigType::GlobalConfig;
@@ -29,11 +32,31 @@ QtConfig::~QtConfig() {
     }
 }
 
-const std::array<int, Settings::NativeButton::NumButtons> QtConfig::default_buttons = {
-    Qt::Key_A, Qt::Key_S, Qt::Key_Z, Qt::Key_X, Qt::Key_T, Qt::Key_G,
-    Qt::Key_F, Qt::Key_H, Qt::Key_Q, Qt::Key_W, Qt::Key_M, Qt::Key_N,
-    Qt::Key_O, Qt::Key_P, Qt::Key_1, Qt::Key_2, Qt::Key_B, Qt::Key_V,
-};
+// Default button bindings — keyboard + SDL gc_button (Xbox / PS3 / PS4 / PS5).
+// gc_button values follow SDL's standard virtual controller mapping.
+// All bindings are independent (OR logic) — any one triggers the button.
+// Order matches NativeButton enum.
+const std::array<std::vector<std::string>, Settings::NativeButton::NumButtons> QtConfig::default_buttons{{
+    //              Keyboard               Extra kbd       gc_button (SDL virtual)
+    {{"code:76,engine:keyboard","code:16777248,engine:keyboard","engine:sdl,gc_button:1,port:0"}},   // A = L + Shift + B
+    {{"code:75,engine:keyboard","code:16777249,engine:keyboard","engine:sdl,gc_button:0,port:0"}},   // B = K + Ctrl + A
+    {{"code:73,engine:keyboard","code:88,engine:keyboard","code:16777252,engine:keyboard","engine:sdl,gc_button:3,port:0"}}, // X = I+X+F13+Y
+    {{"code:74,engine:keyboard","code:90,engine:keyboard","code:16777251,engine:keyboard","engine:sdl,gc_button:2,port:0"}}, // Y = J+Z+F12+X
+    {{"code:16777235,engine:keyboard","engine:sdl,gc_button:11,port:0"}},   // Up   = Up + DPad_Up
+    {{"code:16777237,engine:keyboard","engine:sdl,gc_button:12,port:0"}},   // Down = Down + DPad_Down
+    {{"code:16777234,engine:keyboard","engine:sdl,gc_button:13,port:0"}},   // Left = Left + DPad_Left
+    {{"code:16777236,engine:keyboard","engine:sdl,gc_button:14,port:0"}},   // Right= Right + DPad_Right
+    {{"code:85,engine:keyboard",        "engine:sdl,gc_button:9,port:0"}},   // L = U + L_Bumper
+    {{"code:79,engine:keyboard",        "engine:sdl,gc_button:10,port:0"}},  // R = O + R_Bumper
+    {{"code:16777220,engine:keyboard","code:16777221,engine:keyboard","engine:sdl,gc_button:6,port:0"}}, // Start = Enter+Num_Enter+Start
+    {{"code:32,engine:keyboard",     "code:16777219,engine:keyboard","engine:sdl,gc_button:4,port:0"}},  // Select = Space+Shift+Tab+Select
+    {{}},  // Debug = (cleared)
+    {{}},  // Gpio14 = (cleared)
+    {{"code:81,direction:+,engine:keyboard,threshold:0.5","direction:+,engine:sdl,gc_axis:4,port:0,threshold:0.5"}}, // ZL = Q+L_Trigger
+    {{"code:69,direction:+,engine:keyboard,threshold:0.5","direction:+,engine:sdl,gc_axis:5,port:0,threshold:0.5"}}, // ZR = E+R_Trigger
+    {{}},  // Home = (cleared)
+    {{}},  // Power = (cleared)
+}};
 
 const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> QtConfig::default_analogs{{
     {
@@ -41,14 +64,14 @@ const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> QtConfi
         Qt::Key_Down,
         Qt::Key_Left,
         Qt::Key_Right,
-        Qt::Key_D,
+        0, // CircleMod: no default (user cleared)
     },
     {
         Qt::Key_I,
         Qt::Key_K,
         Qt::Key_J,
         Qt::Key_L,
-        Qt::Key_D,
+        0, // CStickMod: no default (user cleared)
     },
 }};
 
@@ -59,46 +82,46 @@ const std::array<std::array<int, 5>, Settings::NativeAnalog::NumAnalogs> QtConfi
 // clang-format off
 const std::vector<UISettings::Shortcut> QtConfig::default_hotkeys {{
      {QStringLiteral("Advance Frame"),            QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::ApplicationShortcut}},
-     {QStringLiteral("Audio Mute/Unmute"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+M"), Qt::WindowShortcut}},
-     {QStringLiteral("Audio Volume Down"),        QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WindowShortcut}},
-     {QStringLiteral("Audio Volume Up"),          QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WindowShortcut}},
-     {QStringLiteral("Capture Screenshot"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+P"), Qt::WidgetWithChildrenShortcut}},
+     {QStringLiteral("Audio Mute/Unmute"),        QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Audio Volume Down"),        QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Audio Volume Up"),          QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Capture Screenshot"),       QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Debug Pause"),              QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Debug Resume"),             QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Debug Step"),               QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Debug Unschedule All"),     QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Debug Schedule All"),       QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WidgetWithChildrenShortcut}},
-     {QStringLiteral("Continue/Pause Emulation"), QStringLiteral("Main Window"), {QStringLiteral("F4"),     Qt::WindowShortcut}},
-     {QStringLiteral("Decrease 3D Factor"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl+-"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Decrease Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral("-"),      Qt::ApplicationShortcut}},
-     {QStringLiteral("Exit Azahar"),              QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Q"), Qt::WindowShortcut}},
+     {QStringLiteral("Continue/Pause Emulation"), QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::WindowShortcut}},
+     {QStringLiteral("Decrease 3D Factor"),       QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Decrease Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral(""),      Qt::ApplicationShortcut}},
+     {QStringLiteral("Exit Azahar"),              QStringLiteral("Main Window"), {QStringLiteral("Ctrl+End"), Qt::WindowShortcut}},
      {QStringLiteral("Exit Fullscreen"),          QStringLiteral("Main Window"), {QStringLiteral("Esc"),    Qt::WindowShortcut}},
      {QStringLiteral("Fullscreen"),               QStringLiteral("Main Window"), {QStringLiteral("F11"),    Qt::WindowShortcut}},
-     {QStringLiteral("Increase 3D Factor"),       QStringLiteral("Main Window"), {QStringLiteral("Ctrl++"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Increase Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral("+"),      Qt::ApplicationShortcut}},
-     {QStringLiteral("Load Amiibo"),              QStringLiteral("Main Window"), {QStringLiteral("F2"),     Qt::WidgetWithChildrenShortcut}},
+     {QStringLiteral("Increase 3D Factor"),       QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Increase Speed Limit"),     QStringLiteral("Main Window"), {QStringLiteral(""),      Qt::ApplicationShortcut}},
+     {QStringLiteral("Load Amiibo"),              QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::WidgetWithChildrenShortcut}},
      {QStringLiteral("Load File"),                QStringLiteral("Main Window"), {QStringLiteral("Ctrl+O"), Qt::WidgetWithChildrenShortcut}},
-     {QStringLiteral("Load from Newest Non-Quicksave Slot"),  QStringLiteral("Main Window"), {QStringLiteral("Ctrl+V"), Qt::WindowShortcut}},
-     {QStringLiteral("Multiplayer Browse Public Rooms"),      QStringLiteral("Main Window"), {QStringLiteral("Ctrl+B"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Multiplayer Create Room"),              QStringLiteral("Main Window"), {QStringLiteral("Ctrl+N"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Multiplayer Direct Connect to Room"),   QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Shift"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Multiplayer Leave Room"),               QStringLiteral("Main Window"), {QStringLiteral("Ctrl+L"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Multiplayer Show Current Room"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+R"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Quick Save"),               QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WindowShortcut}},
-     {QStringLiteral("Quick Load"),               QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::WindowShortcut}},
-     {QStringLiteral("Remove Amiibo"),            QStringLiteral("Main Window"), {QStringLiteral("F3"),     Qt::ApplicationShortcut}},
-     {QStringLiteral("Restart Emulation"),        QStringLiteral("Main Window"), {QStringLiteral("F6"),     Qt::WindowShortcut}},
-     {QStringLiteral("Rotate Screens Upright"),   QStringLiteral("Main Window"), {QStringLiteral("F8"),     Qt::WindowShortcut}},
-     {QStringLiteral("Save to Oldest Non-Quicksave Slot"),  QStringLiteral("Main Window"), {QStringLiteral("Ctrl+C"), Qt::WindowShortcut}},
-     {QStringLiteral("Stop Emulation"),           QStringLiteral("Main Window"), {QStringLiteral("F5"),     Qt::WindowShortcut}},
-     {QStringLiteral("Swap Screens"),             QStringLiteral("Main Window"), {QStringLiteral("F9"),     Qt::WindowShortcut}},
-     {QStringLiteral("Toggle 3D"),                QStringLiteral("Main Window"), {QStringLiteral("Ctrl+3"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Toggle Custom Textures"),   QStringLiteral("Main Window"), {QStringLiteral("F7"),     Qt::ApplicationShortcut}},
-     {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+F"), Qt::WindowShortcut}},
-     {QStringLiteral("Toggle Frame Advancing"),   QStringLiteral("Main Window"), {QStringLiteral("Ctrl+A"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Toggle Per-Application Speed"),  QStringLiteral("Main Window"), {QStringLiteral("Ctrl+Z"), Qt::ApplicationShortcut}},
-     {QStringLiteral("Toggle Screen Layout"),     QStringLiteral("Main Window"), {QStringLiteral("F10"),    Qt::WindowShortcut}},
-     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral("Ctrl+S"), Qt::WindowShortcut}},
+     {QStringLiteral("Load from Newest Non-Quicksave Slot"),  QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Multiplayer Browse Public Rooms"),      QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Multiplayer Create Room"),              QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Multiplayer Direct Connect to Room"),   QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Multiplayer Leave Room"),               QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Multiplayer Show Current Room"),        QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Quick Save"),               QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Quick Load"),               QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Remove Amiibo"),            QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::ApplicationShortcut}},
+     {QStringLiteral("Restart Emulation"),        QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::WindowShortcut}},
+     {QStringLiteral("Rotate Screens Upright"),   QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::WindowShortcut}},
+     {QStringLiteral("Save to Oldest Non-Quicksave Slot"),  QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Stop Emulation"),           QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::WindowShortcut}},
+     {QStringLiteral("Swap Screens"),             QStringLiteral("Main Window"), {QStringLiteral("Tab"),     Qt::WindowShortcut}},
+     {QStringLiteral("Toggle 3D"),                QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Custom Textures"),   QStringLiteral("Main Window"), {QStringLiteral(""),     Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Filter Bar"),        QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
+     {QStringLiteral("Toggle Frame Advancing"),   QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Per-Application Speed"),  QStringLiteral("Main Window"), {QStringLiteral(""), Qt::ApplicationShortcut}},
+     {QStringLiteral("Toggle Screen Layout"),     QStringLiteral("Main Window"), {QStringLiteral(""),    Qt::WindowShortcut}},
+     {QStringLiteral("Toggle Status Bar"),        QStringLiteral("Main Window"), {QStringLiteral(""), Qt::WindowShortcut}},
      {QStringLiteral("Toggle Texture Dumping"),   QStringLiteral("Main Window"), {QStringLiteral(""),       Qt::ApplicationShortcut}},
      {QStringLiteral("Toggle Turbo Mode"),        QStringLiteral("Main Window"), {QStringLiteral(""),      Qt::ApplicationShortcut}},
     }};
@@ -381,13 +404,57 @@ void QtConfig::ReadControlValues() {
         profile.name =
             ReadSetting(Settings::QKeys::name, QStringLiteral("Default")).toString().toStdString();
         for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
-            std::string default_param = InputCommon::GenerateKeyboardParam(default_buttons[i]);
-            profile.buttons[i] = ReadSetting(QString::fromUtf8(Settings::NativeButton::mapping[i]),
-                                             QString::fromStdString(default_param))
-                                     .toString()
-                                     .toStdString();
-            if (profile.buttons[i].empty())
-                profile.buttons[i] = default_param;
+            // Multi-key mapping: read array of bindings per button
+            const QString btnKey = QString::fromUtf8(Settings::NativeButton::mapping[i]);
+            const int numBinds = qt_config->beginReadArray(btnKey);
+            profile.buttons[i].clear();
+            for (int j = 0; j < numBinds && j < Settings::MAX_BINDINGS_PER_BUTTON; ++j) {
+                qt_config->setArrayIndex(j);
+                QString bindVal = ReadSetting(QStringLiteral("bind"), QString())
+                                     .toString();
+                if (!bindVal.isEmpty()) {
+                    profile.buttons[i].push_back(bindVal.toStdString());
+                }
+            }
+            qt_config->endArray();
+            // Only push defaults if the array was never explicitly saved.
+            const bool was_saved = qt_config->contains(btnKey + QStringLiteral("/size"));
+            if (profile.buttons[i].empty() && !was_saved) {
+                for (const auto& b : default_buttons[i])
+                    profile.buttons[i].push_back(b);
+                // Explicitly add SDL virtual controller defaults.
+                // (Brace-init of std::vector<string> in default_buttons hits a
+                //  toolchain bug where only the first string is kept when there
+                //  are exactly 2 entries.)
+                switch (i) {
+                case Settings::NativeButton::Up:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:11,port:0");
+                    break;
+                case Settings::NativeButton::Down:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:12,port:0");
+                    break;
+                case Settings::NativeButton::Left:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:13,port:0");
+                    break;
+                case Settings::NativeButton::Right:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:14,port:0");
+                    break;
+                case Settings::NativeButton::L:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:9,port:0");
+                    break;
+                case Settings::NativeButton::R:
+                    profile.buttons[i].push_back("engine:sdl,gc_button:10,port:0");
+                    break;
+                case Settings::NativeButton::ZL:
+                    profile.buttons[i].push_back(
+                        "direction:+,engine:sdl,gc_axis:4,port:0,threshold:0.5");
+                    break;
+                case Settings::NativeButton::ZR:
+                    profile.buttons[i].push_back(
+                        "direction:+,engine:sdl,gc_axis:5,port:0,threshold:0.5");
+                    break;
+                }
+            }
         }
         for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
             std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
@@ -400,11 +467,34 @@ void QtConfig::ReadControlValues() {
                     .toStdString();
             if (profile.analogs[i].empty())
                 profile.analogs[i] = default_param;
+
+            // Add SDL virtual controller stick defaults as multi-key bindings.
+            // Circle Pad (i=0) → gc_axis LeftX(0)/LeftY(1)
+            // CStick   (i=1) → gc_axis RightX(2)/RightY(3)
+            {
+                Common::ParamPackage analog_pkg(profile.analogs[i]);
+                if (analog_pkg.Get("engine", "") == "analog_from_button") {
+                    const int axis_x = (i == 0) ? 0 : 2;
+                    const int axis_y = (i == 0) ? 1 : 3;
+                    auto add_sdl = [&](const std::string& dir, const std::string& sign,
+                                       int axis) {
+                        std::string sdl = "direction:" + sign + ",engine:sdl,gc_axis:" +
+                                          std::to_string(axis) + ",port:0,threshold:0.5";
+                        analog_pkg.Set(dir + "_1", sdl);
+                        analog_pkg.Set(dir + "_count", 2);
+                    };
+                    add_sdl("up", "-", axis_y);
+                    add_sdl("down", "+", axis_y);
+                    add_sdl("left", "-", axis_x);
+                    add_sdl("right", "+", axis_x);
+                }
+                profile.analogs[i] = analog_pkg.Serialize();
+            }
         }
         profile.motion_device =
             ReadSetting(Settings::QKeys::motion_device,
                         QStringLiteral(
-                            "engine:motion_emu,update_period:100,sensitivity:0.01,tilt_clamp:90.0"))
+                            "engine:motion_emu,update_period:20,sensitivity:0.075,tilt_clamp:90.0,tilt_max_angle:90.0,mode:rate_continuous,default_tilt:90,invert_pitch:true,invert_yaw:false,per_frame:true,clamp_pitch_180:true,auto_tilt_y:true,auto_tilt_y_invert:false,auto_tilt_x:false,auto_tilt_speed:1.0"))
                 .toString()
                 .toStdString();
         profile.touch_device =
@@ -432,6 +522,24 @@ void QtConfig::ReadControlValues() {
                 .toInt());
         profile.udp_pad_index =
             static_cast<u8>(ReadSetting(Settings::QKeys::udp_pad_index, 0).toUInt());
+        Settings::values.use_adaptive_controller_mapping =
+            ReadSetting(QStringLiteral("use_adaptive_controller_mapping"), true).toBool();
+        // Touch screen coordinate bindings (nested: points -> keys)
+        int num_touch = qt_config->beginReadArray(QStringLiteral("touch_points"));
+        for (int t = 0; t < num_touch; ++t) {
+            qt_config->setArrayIndex(t);
+            std::vector<std::string> point_keys;
+            int num_keys = qt_config->beginReadArray(QStringLiteral("keys"));
+            for (int k = 0; k < num_keys; ++k) {
+                qt_config->setArrayIndex(k);
+                QString val = ReadSetting(Settings::QKeys::bind, QString()).toString();
+                if (!val.isEmpty())
+                    point_keys.push_back(val.toStdString());
+            }
+            qt_config->endArray();
+            profile.touch_points.push_back(std::move(point_keys));
+        }
+        qt_config->endArray();
         Settings::values.input_profiles.emplace_back(std::move(profile));
     };
 
@@ -537,6 +645,15 @@ void QtConfig::ReadLayoutValues() {
     ReadGlobalSetting(Settings::values.render_3d_which_display);
     ReadGlobalSetting(Settings::values.filter_mode);
     ReadGlobalSetting(Settings::values.pp_shader_name);
+    ReadBasicSetting(Settings::values.pp_shader_name_2);
+    ReadBasicSetting(Settings::values.pp_shader_name_3);
+    ReadBasicSetting(Settings::values.pp_shader_name_4);
+    ReadBasicSetting(Settings::values.pp_shader_name_5);
+    ReadBasicSetting(Settings::values.pp_shader_name_6);
+    ReadBasicSetting(Settings::values.pp_shader_name_7);
+    ReadBasicSetting(Settings::values.pp_shader_name_8);
+    ReadBasicSetting(Settings::values.pp_shader_name_9);
+    ReadBasicSetting(Settings::values.pp_shader_name_10);
     ReadGlobalSetting(Settings::values.anaglyph_shader_name);
     ReadGlobalSetting(Settings::values.layout_option);
     ReadGlobalSetting(Settings::values.swap_screen);
@@ -556,6 +673,41 @@ void QtConfig::ReadLayoutValues() {
         ReadBasicSetting(Settings::values.custom_bottom_width);
         ReadBasicSetting(Settings::values.custom_bottom_height);
         ReadBasicSetting(Settings::values.custom_second_layer_opacity);
+
+        // DiySC: Percentage layout settings
+        ReadBasicSetting(Settings::values.custom_percent_layout);
+        ReadBasicSetting(Settings::values.custom_pct_internal_16x9);
+        ReadBasicSetting(Settings::values.custom_pct_internal_4x3);
+        ReadBasicSetting(Settings::values.custom_pct_top_x);
+        ReadBasicSetting(Settings::values.custom_pct_top_y);
+        ReadBasicSetting(Settings::values.custom_pct_top_width);
+        ReadBasicSetting(Settings::values.custom_pct_top_height);
+        ReadBasicSetting(Settings::values.custom_pct_top_stretch_x);
+        ReadBasicSetting(Settings::values.custom_pct_top_stretch_y);
+        ReadBasicSetting(Settings::values.custom_pct_top_clip_x);
+        ReadBasicSetting(Settings::values.custom_pct_top_clip_y);
+        ReadBasicSetting(Settings::values.custom_pct_top_radius);
+        ReadBasicSetting(Settings::values.custom_pct_top_edge_blur);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_x);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_y);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_width);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_height);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_stretch_x);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_stretch_y);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_clip_x);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_clip_y);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_radius);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_edge_blur);
+        ReadBasicSetting(Settings::values.custom_pct_bottom_opacity);
+        ReadBasicSetting(Settings::values.custom_pct_letterbox_color_r);
+        ReadBasicSetting(Settings::values.custom_pct_letterbox_color_g);
+        ReadBasicSetting(Settings::values.custom_pct_letterbox_color_b);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_top_enable);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_bottom_enable);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_darken);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_size);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_scale);
+        ReadBasicSetting(Settings::values.custom_pct_bg_blur_quality);
 
         ReadBasicSetting(Settings::values.screen_top_stretch);
         ReadBasicSetting(Settings::values.screen_top_leftright_padding);
@@ -1003,10 +1155,18 @@ void QtConfig::SaveControlValues() {
         WriteSetting(Settings::QKeys::name, QString::fromStdString(profile.name),
                      QStringLiteral("default"));
         for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
-            std::string default_param = InputCommon::GenerateKeyboardParam(default_buttons[i]);
-            WriteSetting(QString::fromStdString(Settings::NativeButton::mapping[i]),
-                         QString::fromStdString(profile.buttons[i]),
-                         QString::fromStdString(default_param));
+            // Multi-key mapping: write array of bindings per button
+            const QString btnKey = QString::fromStdString(Settings::NativeButton::mapping[i]);
+            qt_config->beginWriteArray(btnKey);
+            int writeIdx = 0;
+            for (const auto& bind : profile.buttons[i]) {
+                if (bind.empty()) continue;
+                qt_config->setArrayIndex(writeIdx++);
+                WriteSetting(QStringLiteral("bind"), QString::fromStdString(bind));
+            }
+            qt_config->endArray();
+            // Explicitly set size so empty arrays are detectable on load
+            qt_config->setValue(btnKey + QStringLiteral("/size"), writeIdx);
         }
         for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
             std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
@@ -1018,7 +1178,7 @@ void QtConfig::SaveControlValues() {
         }
         WriteSetting(
             Settings::QKeys::motion_device, QString::fromStdString(profile.motion_device),
-            QStringLiteral("engine:motion_emu,update_period:100,sensitivity:0.01,tilt_clamp:90.0"));
+            QStringLiteral("engine:motion_emu,update_period:20,sensitivity:0.075,tilt_clamp:90.0,tilt_max_angle:90.0,mode:rate_continuous,default_tilt:90,invert_pitch:true,invert_yaw:false,per_frame:true,clamp_pitch_180:true,auto_tilt_y:true,auto_tilt_y_invert:false,auto_tilt_x:false,auto_tilt_speed:1.0"));
         WriteSetting(Settings::QKeys::touch_device, QString::fromStdString(profile.touch_device),
                      QStringLiteral("engine:emu_window"));
         WriteSetting(Settings::QKeys::use_touchpad, profile.use_touchpad, false);
@@ -1033,6 +1193,21 @@ void QtConfig::SaveControlValues() {
         WriteSetting(Settings::QKeys::udp_input_port, profile.udp_input_port,
                      InputCommon::CemuhookUDP::DEFAULT_PORT);
         WriteSetting(Settings::QKeys::udp_pad_index, profile.udp_pad_index, 0);
+        WriteSetting(QStringLiteral("use_adaptive_controller_mapping"),
+                     Settings::values.use_adaptive_controller_mapping.GetValue(), true);
+        // Touch screen coordinate bindings (nested: points -> keys)
+        qt_config->beginWriteArray(QStringLiteral("touch_points"));
+        for (std::size_t t = 0; t < profile.touch_points.size(); ++t) {
+            qt_config->setArrayIndex(static_cast<int>(t));
+            qt_config->beginWriteArray(QStringLiteral("keys"));
+            for (std::size_t k = 0; k < profile.touch_points[t].size(); ++k) {
+                qt_config->setArrayIndex(static_cast<int>(k));
+                WriteSetting(Settings::QKeys::bind,
+                             QString::fromStdString(profile.touch_points[t][k]));
+            }
+            qt_config->endArray();
+        }
+        qt_config->endArray();
     }
     qt_config->endArray();
 
@@ -1126,6 +1301,15 @@ void QtConfig::SaveLayoutValues() {
     WriteGlobalSetting(Settings::values.render_3d_which_display);
     WriteGlobalSetting(Settings::values.filter_mode);
     WriteGlobalSetting(Settings::values.pp_shader_name);
+    WriteBasicSetting(Settings::values.pp_shader_name_2);
+    WriteBasicSetting(Settings::values.pp_shader_name_3);
+    WriteBasicSetting(Settings::values.pp_shader_name_4);
+    WriteBasicSetting(Settings::values.pp_shader_name_5);
+    WriteBasicSetting(Settings::values.pp_shader_name_6);
+    WriteBasicSetting(Settings::values.pp_shader_name_7);
+    WriteBasicSetting(Settings::values.pp_shader_name_8);
+    WriteBasicSetting(Settings::values.pp_shader_name_9);
+    WriteBasicSetting(Settings::values.pp_shader_name_10);
     WriteGlobalSetting(Settings::values.anaglyph_shader_name);
     WriteGlobalSetting(Settings::values.layout_option);
     WriteGlobalSetting(Settings::values.swap_screen);
@@ -1145,6 +1329,41 @@ void QtConfig::SaveLayoutValues() {
         WriteBasicSetting(Settings::values.custom_bottom_width);
         WriteBasicSetting(Settings::values.custom_bottom_height);
         WriteBasicSetting(Settings::values.custom_second_layer_opacity);
+
+        // DiySC: Percentage layout settings
+        WriteBasicSetting(Settings::values.custom_percent_layout);
+        WriteBasicSetting(Settings::values.custom_pct_internal_16x9);
+        WriteBasicSetting(Settings::values.custom_pct_internal_4x3);
+        WriteBasicSetting(Settings::values.custom_pct_top_x);
+        WriteBasicSetting(Settings::values.custom_pct_top_y);
+        WriteBasicSetting(Settings::values.custom_pct_top_width);
+        WriteBasicSetting(Settings::values.custom_pct_top_height);
+        WriteBasicSetting(Settings::values.custom_pct_top_stretch_x);
+        WriteBasicSetting(Settings::values.custom_pct_top_stretch_y);
+        WriteBasicSetting(Settings::values.custom_pct_top_clip_x);
+        WriteBasicSetting(Settings::values.custom_pct_top_clip_y);
+        WriteBasicSetting(Settings::values.custom_pct_top_radius);
+        WriteBasicSetting(Settings::values.custom_pct_top_edge_blur);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_x);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_y);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_width);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_height);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_stretch_x);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_stretch_y);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_clip_x);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_clip_y);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_radius);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_edge_blur);
+        WriteBasicSetting(Settings::values.custom_pct_bottom_opacity);
+        WriteBasicSetting(Settings::values.custom_pct_letterbox_color_r);
+        WriteBasicSetting(Settings::values.custom_pct_letterbox_color_g);
+        WriteBasicSetting(Settings::values.custom_pct_letterbox_color_b);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_top_enable);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_bottom_enable);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_darken);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_size);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_scale);
+        WriteBasicSetting(Settings::values.custom_pct_bg_blur_quality);
 
         WriteBasicSetting(Settings::values.screen_top_stretch);
         WriteBasicSetting(Settings::values.screen_top_leftright_padding);

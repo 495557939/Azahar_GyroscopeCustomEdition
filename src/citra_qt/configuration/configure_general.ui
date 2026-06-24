@@ -94,6 +94,13 @@
           </property>
          </widget>
         </item>
+        <item>
+         <widget class="QCheckBox" name="toggle_auto_fullscreen">
+          <property name="text">
+           <string>Go fullscreen when a game starts</string>
+          </property>
+         </widget>
+        </item>
        </layout>
       </widget>
      </item>

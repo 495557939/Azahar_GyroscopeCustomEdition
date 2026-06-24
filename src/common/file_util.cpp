@@ -938,20 +938,27 @@ void SetUserPath(const std::string& path) {
         g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);
     } else {
 #ifdef _WIN32
+        // ─────────────────────────────────────────────────────────────
+        // DiySC: 便携版 — 始终使用 exe 同级目录下的 UserProfile 文件夹
+        // 禁止回退到 AppData，确保所有数据在相对目录中
+        // ─────────────────────────────────────────────────────────────
         user_path = GetExeDirectory() + DIR_SEP USERDATA_DIR DIR_SEP;
         std::string& legacy_citra_user_path = g_paths[UserPath::LegacyCitraUserDir];
         std::string& legacy_lime3ds_user_path = g_paths[UserPath::LegacyLime3DSUserDir];
 
+        // 确保 UserProfile 目录存在（便携版必须创建）
         if (!FileUtil::IsDirectory(user_path)) {
-            user_path = AppDataRoamingDirectory() + DIR_SEP EMU_DATA_DIR DIR_SEP;
-            legacy_citra_user_path =
-                AppDataRoamingDirectory() + DIR_SEP LEGACY_CITRA_DATA_DIR DIR_SEP;
-            legacy_lime3ds_user_path =
-                AppDataRoamingDirectory() + DIR_SEP LEGACY_LIME3DS_DATA_DIR DIR_SEP;
-        } else {
-            LOG_INFO(Common_Filesystem, "Using the local user directory");
+            FileUtil::CreateFullPath(user_path);
+            LOG_INFO(Common_Filesystem, "Created portable UserProfile directory: {}", user_path);
         }
 
+        // 仍设置 legacy 路径以支持从旧版迁移数据
+        legacy_citra_user_path =
+            AppDataRoamingDirectory() + DIR_SEP LEGACY_CITRA_DATA_DIR DIR_SEP;
+        legacy_lime3ds_user_path =
+            AppDataRoamingDirectory() + DIR_SEP LEGACY_LIME3DS_DATA_DIR DIR_SEP;
+
+        LOG_INFO(Common_Filesystem, "Using portable user directory: {}", user_path);
         g_paths.emplace(UserPath::ConfigDir, user_path + CONFIG_DIR DIR_SEP);
         g_paths.emplace(UserPath::CacheDir, user_path + CACHE_DIR DIR_SEP);
 #elif defined(ANDROID) && !defined(HAVE_LIBRETRO_VFS)

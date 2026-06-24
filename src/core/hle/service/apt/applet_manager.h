@@ -523,8 +523,8 @@ private:
 
     Core::TimingEventType* button_update_event;
     std::atomic<bool> is_device_reload_pending{true};
-    std::unique_ptr<Input::ButtonDevice> home_button;
-    std::unique_ptr<Input::ButtonDevice> power_button;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> home_button;
+    std::vector<std::unique_ptr<Input::ButtonDevice>> power_button;
     bool last_home_button_state = false;
     bool last_power_button_state = false;
 

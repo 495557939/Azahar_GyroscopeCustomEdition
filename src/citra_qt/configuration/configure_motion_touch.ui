@@ -37,6 +37,119 @@
       <item>
        <layout class="QHBoxLayout">
         <item>
+         <widget class="QLabel" name="motion_mode_label">
+          <property name="text">
+           <string>Mode:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QComboBox" name="motion_mode"/>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item>
+         <widget class="QLabel" name="motion_tilt_label">
+          <property name="text">
+           <string>Default Tilt:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="motion_default_tilt">
+          <property name="suffix">
+           <string>°</string>
+          </property>
+          <property name="minimum">
+           <number>-180</number>
+          </property>
+          <property name="maximum">
+           <number>360</number>
+          </property>
+          <property name="value">
+           <number>90</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item>
+         <widget class="QLabel" name="motion_invert_label">
+          <property name="text">
+           <string>Invert:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="motion_invert_pitch">
+          <property name="text">
+           <string>Pitch (Up/Down)</string>
+          </property>
+          <property name="checked">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QCheckBox" name="motion_invert_yaw">
+          <property name="text">
+           <string>Yaw (Left/Right)</string>
+          </property>
+          <property name="checked">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item>
+         <widget class="QLabel" name="motion_update_label">
+          <property name="text">
+           <string>Update Interval:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="motion_update_period">
+          <property name="suffix">
+           <string> ms</string>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>200</number>
+          </property>
+          <property name="value">
+           <number>100</number>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item>
+         <widget class="QCheckBox" name="motion_per_frame">
+          <property name="text">
+           <string>Sync with game framerate (overrides update interval above)</string>
+          </property>
+          <property name="checked">
+           <bool>false</bool>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout">
+        <item>
          <widget class="QLabel" name="motion_sensitivity_label">
           <property name="text">
            <string>Sensitivity:</string>
@@ -52,16 +165,16 @@
            <number>4</number>
           </property>
           <property name="minimum">
-           <double>0.010000000000000</double>
+           <double>0.000000000000000</double>
           </property>
           <property name="maximum">
            <double>10.000000000000000</double>
           </property>
           <property name="singleStep">
-           <double>0.001000000000000</double>
+           <double>0.010000000000000</double>
           </property>
           <property name="value">
-           <double>0.010000000000000</double>
+           <double>0.050000000000000</double>
           </property>
          </widget>
         </item>

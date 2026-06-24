@@ -62,9 +62,39 @@ struct PresentUniformData {
     int screen_id_r = 0;
     int layer = 0;
     int reverse_interlaced = 0;
+    Common::Vec2f screen_origin;
+    float corner_radius = 0.0f;
+    float _pad0 = 0.0f; // std140 alignment: vec4 must be 16-byte aligned
+    Common::Vec4f bg_color{0.0f, 0.0f, 0.0f, 1.0f};
+    float edge_blur = 0.0f;
+    float opacity = 1.0f;
+    // DiySC: Vignette + Overlay (std140: vec3=16 bytes, need padding after each)
+    float vignette_enable = 0.0f;
+    float vignette_size = 0.5f;
+    float overlay_enable = 0.0f;
+    float _pad_v = 0.0f;
+    Common::Vec3f vignette_color{0.0f, 0.0f, 0.0f};
+    float _pad_vc = 0.0f; // std140 vec3 padding (12→16)
+    Common::Vec3f overlay_color{0.5f, 0.5f, 0.5f};
+    float _pad_oc = 0.0f; // std140 vec3 padding (12→16)
+    float _pad1 = 0.0f;
 };
-static_assert(sizeof(PresentUniformData) == 112,
-              "PresentUniformData does not structure in shader!");
+static_assert(sizeof(PresentUniformData) == 204,
+              "PresentUniformData does not match shader layout!");
+
+// DiySC: Background fill push constant
+struct BgFillUniformData {
+    std::array<f32, 4 * 4> modelview;
+    Common::Vec2f tex_size;
+    float blur_sigma = 8.0f;
+    float scale = 3.0f;
+    float darken = 0.5f;
+    s32 direction = 0;   // 0=horizontal pass, 1=vertical+display pass
+    s32 max_radius = 64; // quality-controlled
+    float _pad = 0.0f;
+};
+static_assert(sizeof(BgFillUniformData) == 96,
+              "BgFillUniformData does not match shader layout!");
 
 class RendererVulkan : public VideoCore::RendererBase {
     static constexpr std::size_t PRESENT_PIPELINES = 3;
@@ -100,6 +130,7 @@ private:
                         bool flipped);
 
     void DrawScreens(Frame* frame, const Layout::FramebufferLayout& layout, bool flipped);
+    void DrawBackgroundFill(Frame* frame, const Layout::FramebufferLayout& layout, bool flipped);
     void DrawBottomScreen(const Layout::FramebufferLayout& layout,
                           const Common::Rectangle<u32>& bottom_screen);
 
@@ -140,12 +171,32 @@ private:
     std::array<vk::Pipeline, PRESENT_PIPELINES> present_pipelines;
     std::array<vk::ShaderModule, PRESENT_PIPELINES> present_shaders;
     std::array<vk::Sampler, 2> present_samplers;
+    vk::ShaderModule bg_fill_vertex_shader{};
+    vk::ShaderModule bg_fill_fragment_shader{};
+    vk::Pipeline bg_fill_pipeline{};
+    vk::UniquePipelineLayout bg_fill_pipeline_layout{};
     vk::ShaderModule present_vertex_shader;
     u32 current_pipeline = 0;
 
     std::array<ScreenInfo, 3> screen_infos{};
     PresentUniformData draw_info{};
     vk::ClearColorValue clear_color{};
+
+    // DiySC: Current screen clip and radius state
+    float current_clip_left = 0.0f;
+    float current_clip_right = 0.0f;
+    float current_clip_top = 0.0f;
+    float current_clip_bottom = 0.0f;
+    float current_radius = 0.0f;
+    float current_edge_blur = 0.0f;
+    float current_opacity = 1.0f;
+    bool current_vignette_enabled = false;
+    std::array<float, 3> current_vignette_color = {0, 0, 0};
+    float current_vignette_size = 0.5f;
+    bool current_overlay_enabled = false;
+    std::array<float, 3> current_overlay_color = {0.5f, 0.5f, 0.5f};
+    float current_screen_x = 0.0f;
+    float current_screen_y = 0.0f;
 
     vk::ShaderModule cursor_vertex_shader{};
     vk::ShaderModule cursor_fragment_shader{};

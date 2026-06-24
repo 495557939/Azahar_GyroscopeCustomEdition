@@ -333,6 +333,230 @@ FramebufferLayout AndroidSecondaryLayout(u32 width, u32 height) {
     }
 }
 
+// DiySC: Percentage-based custom layout
+FramebufferLayout CustomPercentFrameLayout(u32 width, u32 height, bool is_swapped) {
+    ASSERT(width > 0);
+    ASSERT(height > 0);
+
+    const bool upright = Settings::values.upright_screen.GetValue();
+    if (upright) {
+        std::swap(width, height);
+    }
+
+    // Determine internal canvas dimensions based on aspect ratio lock
+    u32 canvas_w = width;
+    u32 canvas_h = height;
+    u32 offset_x = 0;
+    u32 offset_y = 0;
+
+    const bool lock_16x9 = Settings::values.custom_pct_internal_16x9.GetValue();
+    const bool lock_4x3 = Settings::values.custom_pct_internal_4x3.GetValue();
+
+    if (lock_4x3) {
+        // 4:3 internal canvas, centered with letterbox
+        if (width * 3 > height * 4) {
+            // Window is wider than 4:3, letterbox left/right
+            canvas_h = height;
+            canvas_w = height * 4 / 3;
+            offset_x = (width - canvas_w) / 2;
+        } else {
+            // Window is taller than 4:3, letterbox top/bottom
+            canvas_w = width;
+            canvas_h = width * 3 / 4;
+            offset_y = (height - canvas_h) / 2;
+        }
+    } else if (lock_16x9) {
+        // 16:9 internal canvas, centered with letterbox
+        if (width * 9 > height * 16) {
+            // Window is wider than 16:9, letterbox left/right
+            canvas_h = height;
+            canvas_w = height * 16 / 9;
+            offset_x = (width - canvas_w) / 2;
+        } else {
+            // Window is taller than 16:9, letterbox top/bottom
+            canvas_w = width;
+            canvas_h = width * 9 / 16;
+            offset_y = (height - canvas_h) / 2;
+        }
+    }
+
+    // Read percentage settings (0-10000 = 0.00%-100.00%, stored as u16)
+    const float pct_top_x = Settings::values.custom_pct_top_x.GetValue() / 100.0f;
+    const float pct_top_y = Settings::values.custom_pct_top_y.GetValue() / 100.0f;
+    const float pct_top_w = Settings::values.custom_pct_top_width.GetValue() / 100.0f;
+    const float pct_top_h = Settings::values.custom_pct_top_height.GetValue() / 100.0f;
+    const float pct_bot_x = Settings::values.custom_pct_bottom_x.GetValue() / 100.0f;
+    const float pct_bot_y = Settings::values.custom_pct_bottom_y.GetValue() / 100.0f;
+    const float pct_bot_w = Settings::values.custom_pct_bottom_width.GetValue() / 100.0f;
+    const float pct_bot_h = Settings::values.custom_pct_bottom_height.GetValue() / 100.0f;
+
+    // Compute pixel positions within canvas
+    u32 top_w = static_cast<u32>(std::round(canvas_w * pct_top_w / 100.0f));
+    u32 top_h = static_cast<u32>(std::round(canvas_h * pct_top_h / 100.0f));
+    u32 bot_w = static_cast<u32>(std::round(canvas_w * pct_bot_w / 100.0f));
+    u32 bot_h = static_cast<u32>(std::round(canvas_h * pct_bot_h / 100.0f));
+
+    // Compute signed float positions (may be negative for off-screen movement)
+    const float top_x_f = canvas_w * pct_top_x / 100.0f - static_cast<float>(top_w) / 2.0f;
+    const float top_y_f = canvas_h * pct_top_y / 100.0f - static_cast<float>(top_h) / 2.0f;
+    const float bot_x_f = canvas_w * pct_bot_x / 100.0f - static_cast<float>(bot_w) / 2.0f;
+    const float bot_y_f = canvas_h * pct_bot_y / 100.0f - static_cast<float>(bot_h) / 2.0f;
+
+    u32 top_x = static_cast<u32>(std::max(0.0f, top_x_f));
+    u32 top_y = static_cast<u32>(std::max(0.0f, top_y_f));
+    u32 bot_x = static_cast<u32>(std::max(0.0f, bot_x_f));
+    u32 bot_y = static_cast<u32>(std::max(0.0f, bot_y_f));
+
+    // Apply stretch factors (0-10000 = 0.00%-100.00%, stored as u16)
+    const float stretch_tx = Settings::values.custom_pct_top_stretch_x.GetValue() / 100.0f;
+    const float stretch_ty = Settings::values.custom_pct_top_stretch_y.GetValue() / 100.0f;
+    const float stretch_bx = Settings::values.custom_pct_bottom_stretch_x.GetValue() / 100.0f;
+    const float stretch_by = Settings::values.custom_pct_bottom_stretch_y.GetValue() / 100.0f;
+
+    // Save original sizes to center-adjust positions after stretch
+    const u32 orig_top_w = top_w;
+    const u32 orig_top_h = top_h;
+    const u32 orig_bot_w = bot_w;
+    const u32 orig_bot_h = bot_h;
+
+    top_w = static_cast<u32>(std::round(top_w * stretch_tx / 100.0f));
+    top_h = static_cast<u32>(std::round(top_h * stretch_ty / 100.0f));
+    bot_w = static_cast<u32>(std::round(bot_w * stretch_bx / 100.0f));
+    bot_h = static_cast<u32>(std::round(bot_h * stretch_by / 100.0f));
+
+    // Center-adjust positions: when stretch shrinks the screen, shift so it stays centered
+    top_x += (orig_top_w - top_w) / 2;
+    top_y += (orig_top_h - top_h) / 2;
+    bot_x += (orig_bot_w - bot_w) / 2;
+    bot_y += (orig_bot_h - bot_h) / 2;
+
+    // Offset positions into full window space
+    top_x += offset_x;
+    top_y += offset_y;
+    bot_x += offset_x;
+    bot_y += offset_y;
+
+    // Build layout
+    FramebufferLayout res{
+        width, height, true, true, {}, {}, !Settings::values.upright_screen.GetValue(), false};
+
+    // DiySC: Read clip and radius settings (0-10000 = 0%-100%)
+    const float clip_tx = Settings::values.custom_pct_top_clip_x.GetValue() / 10000.0f;
+    const float clip_ty = Settings::values.custom_pct_top_clip_y.GetValue() / 10000.0f;
+    const float clip_bx = Settings::values.custom_pct_bottom_clip_x.GetValue() / 10000.0f;
+    const float clip_by = Settings::values.custom_pct_bottom_clip_y.GetValue() / 10000.0f;
+    const float radius_t = Settings::values.custom_pct_top_radius.GetValue() / 100.0f;
+    const float radius_b = Settings::values.custom_pct_bottom_radius.GetValue() / 100.0f;
+    const float blur_t = Settings::values.custom_pct_top_edge_blur.GetValue() / 100.0f;
+    const float blur_b = Settings::values.custom_pct_bottom_edge_blur.GetValue() / 100.0f;
+
+    // Record negative offsets so renderers can shift vertices off-screen
+    res.top_offset_x = std::min(0.0f, top_x_f);
+    res.top_offset_y = std::min(0.0f, top_y_f);
+    res.bot_offset_x = std::min(0.0f, bot_x_f);
+    res.bot_offset_y = std::min(0.0f, bot_y_f);
+
+    res.top_clip_left = clip_tx;
+    res.top_clip_right = clip_tx;
+    res.top_clip_top = clip_ty;
+    res.top_clip_bottom = clip_ty;
+    res.bot_clip_left = clip_bx;
+    res.bot_clip_right = clip_bx;
+    res.bot_clip_top = clip_by;
+    res.bot_clip_bottom = clip_by;
+
+    // Convert radius percentage to pixels (radius as fraction of half the smaller dimension)
+    const float top_min_half = std::min(top_w, top_h) / 2.0f;
+    const float bot_min_half = std::min(bot_w, bot_h) / 2.0f;
+    res.top_radius = top_min_half * radius_t / 100.0f;
+    res.bot_radius = bot_min_half * radius_b / 100.0f;
+    res.top_edge_blur = top_min_half * blur_t / 100.0f;
+    res.bot_edge_blur = bot_min_half * blur_b / 100.0f;
+
+    const u16 opacity_pct = Settings::values.custom_pct_bottom_opacity.GetValue();
+    const float opacity_val = opacity_pct / 100.0f;
+    if (!is_swapped) {
+        res.bottom_opacity = opacity_val;
+        res.top_opacity = 1.0f;
+    } else {
+        res.top_opacity = opacity_val;
+        res.bottom_opacity = 1.0f;
+    }
+
+    // DiySC: Background blur fill
+    const bool bg_top_en = Settings::values.custom_pct_bg_blur_top_enable.GetValue();
+    const bool bg_bot_en = Settings::values.custom_pct_bg_blur_bottom_enable.GetValue();
+    if (bg_bot_en) {
+        res.bg_blur_enabled = true;
+        res.bg_blur_is_bottom = true;
+    } else if (bg_top_en) {
+        res.bg_blur_enabled = true;
+        res.bg_blur_is_bottom = false;
+    }
+    // Darken: 0% = no darkening, 100% = fully dark
+    res.bg_blur_darken = Settings::values.custom_pct_bg_blur_darken.GetValue() / 10000.0f;
+    // Sigma: value/200 → 5%=2.5σ(smooth), 100%=50σ(max). Compressed range for better control.
+    res.bg_blur_sigma = Settings::values.custom_pct_bg_blur_size.GetValue() / 200.0f;
+    // Scale: 100% = 1.0 (no zoom), 300% = 3.0, 655% = 6.55
+    res.bg_blur_scale = Settings::values.custom_pct_bg_blur_scale.GetValue() / 10000.0f;
+    // Quality: map enum to max sample radius for separable Gaussian
+    switch (Settings::values.custom_pct_bg_blur_quality.GetValue()) {
+    case 0:  res.bg_blur_max_radius = 16;  break; // Low
+    case 2:  res.bg_blur_max_radius = 64;  break; // High
+    case 3:  res.bg_blur_max_radius = 128; break; // Ultra
+    default: res.bg_blur_max_radius = 32;  break; // Medium
+    }
+
+    // DiySC: Background vignette
+    res.bg_vignette_enabled = Settings::values.custom_pct_bg_vignette_enable.GetValue();
+    res.bg_vignette_color[0] = Settings::values.custom_pct_bg_vignette_color_r.GetValue() / 10000.0f;
+    res.bg_vignette_color[1] = Settings::values.custom_pct_bg_vignette_color_g.GetValue() / 10000.0f;
+    res.bg_vignette_color[2] = Settings::values.custom_pct_bg_vignette_color_b.GetValue() / 10000.0f;
+    res.bg_vignette_size = Settings::values.custom_pct_bg_vignette_size.GetValue() / 10000.0f;
+
+    // DiySC: Background overlay
+    res.bg_overlay_enabled = Settings::values.custom_pct_bg_overlay_enable.GetValue();
+    res.bg_overlay_color[0] = Settings::values.custom_pct_bg_overlay_color_r.GetValue() / 10000.0f;
+    res.bg_overlay_color[1] = Settings::values.custom_pct_bg_overlay_color_g.GetValue() / 10000.0f;
+    res.bg_overlay_color[2] = Settings::values.custom_pct_bg_overlay_color_b.GetValue() / 10000.0f;
+
+    // DiySC: Per-screen vignette and overlay
+    res.top_vignette_enabled = Settings::values.custom_pct_top_vignette_enable.GetValue();
+    res.top_vignette_color[0] = Settings::values.custom_pct_top_vignette_color_r.GetValue() / 10000.0f;
+    res.top_vignette_color[1] = Settings::values.custom_pct_top_vignette_color_g.GetValue() / 10000.0f;
+    res.top_vignette_color[2] = Settings::values.custom_pct_top_vignette_color_b.GetValue() / 10000.0f;
+    res.top_vignette_size = Settings::values.custom_pct_top_vignette_size.GetValue() / 10000.0f;
+    res.bot_vignette_enabled = Settings::values.custom_pct_bot_vignette_enable.GetValue();
+    res.bot_vignette_color[0] = Settings::values.custom_pct_bot_vignette_color_r.GetValue() / 10000.0f;
+    res.bot_vignette_color[1] = Settings::values.custom_pct_bot_vignette_color_g.GetValue() / 10000.0f;
+    res.bot_vignette_color[2] = Settings::values.custom_pct_bot_vignette_color_b.GetValue() / 10000.0f;
+    res.bot_vignette_size = Settings::values.custom_pct_bot_vignette_size.GetValue() / 10000.0f;
+    res.top_overlay_enabled = Settings::values.custom_pct_top_overlay_enable.GetValue();
+    res.top_overlay_color[0] = Settings::values.custom_pct_top_overlay_color_r.GetValue() / 10000.0f;
+    res.top_overlay_color[1] = Settings::values.custom_pct_top_overlay_color_g.GetValue() / 10000.0f;
+    res.top_overlay_color[2] = Settings::values.custom_pct_top_overlay_color_b.GetValue() / 10000.0f;
+    res.bot_overlay_enabled = Settings::values.custom_pct_bot_overlay_enable.GetValue();
+    res.bot_overlay_color[0] = Settings::values.custom_pct_bot_overlay_color_r.GetValue() / 10000.0f;
+    res.bot_overlay_color[1] = Settings::values.custom_pct_bot_overlay_color_g.GetValue() / 10000.0f;
+    res.bot_overlay_color[2] = Settings::values.custom_pct_bot_overlay_color_b.GetValue() / 10000.0f;
+
+    Common::Rectangle<u32> top_rect{top_x, top_y, top_x + top_w, top_y + top_h};
+    Common::Rectangle<u32> bot_rect{bot_x, bot_y, bot_x + bot_w, bot_y + bot_h};
+
+    if (is_swapped) {
+        res.top_screen = bot_rect;
+        res.bottom_screen = top_rect;
+    } else {
+        res.top_screen = top_rect;
+        res.bottom_screen = bot_rect;
+    }
+
+    if (upright) {
+        return reverseLayout(res);
+    }
+    return res;
+}
+
 FramebufferLayout CustomFrameLayout(u32 width, u32 height, bool is_swapped, bool is_portrait_mode) {
     ASSERT(width > 0);
     ASSERT(height > 0);
@@ -438,6 +662,12 @@ FramebufferLayout FrameLayoutFromResolutionScale(u32 res_scale, bool is_secondar
                                            Settings::values.custom_bottom_y.GetValue() +
                                                Settings::values.custom_bottom_height.GetValue()),
                                   Settings::values.swap_screen.GetValue(), is_portrait);
+            break;
+        case Settings::LayoutOption::CustomLayoutPercent:
+            // Use default 3DS layout size scaled by res_scale as canvas for screenshots
+            width = Core::kScreenTopWidth * res_scale;
+            height = (Core::kScreenTopHeight + Core::kScreenBottomHeight) * res_scale;
+            layout = CustomPercentFrameLayout(width, height, Settings::values.swap_screen.GetValue());
             break;
         case Settings::LayoutOption::SingleScreen: {
             const bool swap_screens = is_secondary || Settings::values.swap_screen.GetValue();
@@ -701,6 +931,11 @@ std::pair<unsigned, unsigned> GetMinimumSizeFromLayout(Settings::LayoutOption la
     case Settings::LayoutOption::SideScreen:
         min_width = Core::kScreenTopWidth + Core::kScreenBottomWidth;
         min_height = Core::kScreenBottomHeight;
+        break;
+    case Settings::LayoutOption::CustomLayout:
+    case Settings::LayoutOption::CustomLayoutPercent:
+        min_width = Core::kScreenTopWidth;
+        min_height = Core::kScreenTopHeight + Core::kScreenBottomHeight;
         break;
     case Settings::LayoutOption::Default:
     default:

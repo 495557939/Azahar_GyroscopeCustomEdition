@@ -8,6 +8,7 @@
 #include <condition_variable>
 #include <memory>
 #include <mutex>
+#include <set>
 #include <QThread>
 #include <QWidget>
 #include "core/core.h"
@@ -147,11 +148,13 @@ public:
     void mousePressEvent(QMouseEvent* event) override;
     void mouseMoveEvent(QMouseEvent* event) override;
     void mouseReleaseEvent(QMouseEvent* event) override;
+    void wheelEvent(QWheelEvent* event) override;
 
     bool event(QEvent* event) override;
 
     void focusOutEvent(QFocusEvent* event) override;
     void focusInEvent(QFocusEvent* event) override;
+
     bool HasFocus() const {
         return has_focus;
     }
@@ -217,6 +220,42 @@ private:
     bool first_frame = false;
     bool has_focus = false;
 
+    // RateContinuous global tracking (free cursor, no warp lock)
+    QTimer* rc_poll_timer = nullptr;
+    QPoint rc_last_pos;
+    bool rc_last_pos_valid = false;
+    int rc_warp_cooldown = 0;  // ticks to suppress delta after a screen-edge warp
+
+    // RateHold center-warp tracking (timer-driven, 200 Hz, like RateContinuous)
+    QTimer* rh_poll_timer = nullptr;
+    QPoint rh_center_pos;
+    bool rh_warp_active = false;
+
+    // TiltContinuous: always-active gravity tilt (mouse % of screen center)
+    QTimer* tc_poll_timer = nullptr;
+
+    // TiltHold: right-click gravity tilt (cursor-lock, center-warp)
+    QTimer* th_poll_timer = nullptr;
+    QPoint th_center_pos;
+    bool th_warp_active = false;
+
+    // Controller-to-mouse link polling
+    QTimer* link_poll_timer = nullptr;
+
+    // Track currently pressed keyboard keys for controller-link feature
+    std::set<int> pressed_keys;
+
+    // Center-warp helpers for RateHold / TiltHold cursor lock
+    void StartCenterWarp();
+    void StopCenterWarp();
+
 protected:
     void showEvent(QShowEvent* event) override;
+
+private slots:
+    void PollRateContinuous();  // 200 Hz global timer for RateContinuous (free cursor)
+    void PollRateHold();        // 200 Hz center-warp timer for RateHold (right-click)
+    void PollTiltContinuous();  // 200 Hz global timer for TiltContinuous (gravity tilt)
+    void PollTiltHold();        // 200 Hz center-warp timer for TiltHold (right-click gravity)
+    void PollControllerLink();  // controller-to-mouse link polling
 };

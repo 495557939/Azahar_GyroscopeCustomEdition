@@ -24,6 +24,27 @@ enum class ScreenId : u32 {
     Bottom,
 };
 
+// Special values for resolution_factor (u32) that map to "auto-scale to window
+// times a fractional factor":
+//   11 -> 0.9x window size
+//   12 -> 0.8x window size
+//   13 -> 0.75x window size
+//   14 -> 0.6x window size
+//   15 -> 0.5x window size
+//   16 -> 0.4x window size
+//   17 -> 0.25x window size
+constexpr u32 AUTO_WINDOW_SCALED_MIN = 11;
+constexpr u32 AUTO_WINDOW_SCALED_MAX = 17;
+
+inline float GetAutoWindowScaledFactor(u32 scale_factor) {
+    // scale_factor 11..17 -> 0.9, 0.8, 0.75, 0.6, 0.5, 0.4, 0.25
+    static constexpr float factors[] = {0.9f, 0.8f, 0.75f, 0.6f, 0.5f, 0.4f, 0.25f};
+    const int idx = static_cast<int>(scale_factor) - static_cast<int>(AUTO_WINDOW_SCALED_MIN);
+    if (idx < 0 || idx >= 7)
+        return 1.0f;
+    return factors[idx];
+}
+
 struct RendererSettings {
     // Screenshot
     std::atomic_bool screenshot_requested{false};

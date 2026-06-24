@@ -8,6 +8,8 @@
 #include <QWidget>
 #include "common/common_types.h"
 
+class QDoubleSpinBox;
+
 namespace Settings {
 enum class StereoRenderOption : u32;
 }
@@ -33,6 +35,8 @@ public:
 
     void SetupPerGameUI();
 
+    bool eventFilter(QObject* obj, QEvent* event) override;
+
 private:
     void updateShaders(Settings::StereoRenderOption stereo_option);
     void updateTextureFilter(int index);
@@ -41,4 +45,15 @@ private:
     ConfigurationShared::CheckState swap_screen;
     ConfigurationShared::CheckState upright_screen;
     QColor bg_color;
+
+    // DiySC: Clip and radius spinboxes (created programmatically, not in .ui)
+    QDoubleSpinBox* custom_pct_top_clip_x_ = nullptr;
+    QDoubleSpinBox* custom_pct_top_clip_y_ = nullptr;
+    QDoubleSpinBox* custom_pct_top_radius_ = nullptr;
+    QDoubleSpinBox* custom_pct_bottom_clip_x_ = nullptr;
+    QDoubleSpinBox* custom_pct_bottom_clip_y_ = nullptr;
+    QDoubleSpinBox* custom_pct_bottom_radius_ = nullptr;
+    QDoubleSpinBox* custom_pct_top_edge_blur_ = nullptr;
+    QDoubleSpinBox* custom_pct_bottom_edge_blur_ = nullptr;
+    void setupPctClipRadiusControls();
 };

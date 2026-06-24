@@ -79,8 +79,8 @@ struct Values {
     Settings::Setting<bool> single_window_mode{true, "singleWindowMode"};
     Settings::Setting<bool> fullscreen{false, "fullscreen"};
     Settings::Setting<bool> display_titlebar{true, "displayTitleBars"};
-    Settings::Setting<bool> show_filter_bar{true, "showFilterBar"};
-    Settings::Setting<bool> show_status_bar{true, "showStatusBar"};
+    Settings::Setting<bool> show_filter_bar{false, "showFilterBar"};
+    Settings::Setting<bool> show_status_bar{false, "showStatusBar"};
     Settings::Setting<bool> show_advanced_frametime_info{false, "show_advanced_frametime_info"};
 
     Settings::Setting<bool> confirm_before_closing{true, "confirmClose"};
@@ -88,7 +88,9 @@ struct Values {
     Settings::Setting<bool> first_start{true, "firstStart"};
     Settings::Setting<bool> pause_when_in_background{false, "pauseWhenInBackground"};
     Settings::Setting<bool> mute_when_in_background{false, "muteWhenInBackground"};
-    Settings::Setting<bool> hide_mouse{false, "hideInactiveMouse"};
+    Settings::Setting<bool> hide_mouse{true, "hideInactiveMouse"};
+    // Go fullscreen automatically when a game starts (default off).
+    Settings::Setting<bool> auto_fullscreen_on_game_start{false, "auto_fullscreen_on_game_start"};
 #ifdef ENABLE_QT_UPDATE_CHECKER
     Settings::Setting<bool> check_for_update_on_start{true, "check_for_update_on_start"};
     Settings::Setting<int> update_check_channel{UpdateCheckChannels::STABLE,

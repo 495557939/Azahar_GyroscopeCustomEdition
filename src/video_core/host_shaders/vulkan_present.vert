@@ -8,6 +8,7 @@
 layout (location = 0) in vec2 vert_position;
 layout (location = 1) in vec2 vert_tex_coord;
 layout (location = 0) out vec2 frag_tex_coord;
+layout (location = 1) out vec2 frag_position;
 
 layout (push_constant, std140) uniform DrawInfo {
     mat4 modelview_matrix;
@@ -16,10 +17,16 @@ layout (push_constant, std140) uniform DrawInfo {
     int screen_id_l;
     int screen_id_r;
     int layer;
+    int reverse_interlaced;
+    vec2 screen_origin;
+    float corner_radius;
+    vec4 bg_color;
+    float edge_blur;
 };
 
 void main() {
     vec4 position = vec4(vert_position, 0.0, 1.0) * modelview_matrix;
     gl_Position = vec4(position.x, position.y, 0.0, 1.0);
     frag_tex_coord = vert_tex_coord;
+    frag_position = vert_position;
 }

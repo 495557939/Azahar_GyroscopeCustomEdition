@@ -386,7 +386,7 @@ private:
     Core::TimingEventType* gyroscope_update_event;
 
     std::atomic<bool> is_device_reload_pending{true};
-    std::array<std::unique_ptr<Input::ButtonDevice>, Settings::NativeButton::NUM_BUTTONS_HID>
+    std::array<std::vector<std::unique_ptr<Input::ButtonDevice>>, Settings::NativeButton::NUM_BUTTONS_HID>
         buttons;
     std::unique_ptr<Input::AnalogDevice> circle_pad;
     std::unique_ptr<Input::MotionDevice> motion_device;

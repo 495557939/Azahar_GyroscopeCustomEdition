@@ -57,6 +57,41 @@
            </item>
            <item>
             <property name="text">
+             <string>Auto (0.9x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.8x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.75x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.6x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.5x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.4x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Auto (0.25x Window Size)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
              <string>Native (400x240)</string>
             </property>
            </item>

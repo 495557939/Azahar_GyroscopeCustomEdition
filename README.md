@@ -1,141 +1,111 @@
-![Azahar Emulator](https://azahar-emu.org/resources/images/logo/azahar-name-and-logo.svg)
+# Azahar_GyroscopeCustomEdition (DiySC01 ver)
 
-![Current Release](https://img.shields.io/github/v/release/azahar-emu/azahar?label=Current%20Release)
-![Current Prerelease](https://img.shields.io/github/v/release/azahar-emu/azahar?include_prereleases&label=Current%20Prerelease)
+这是基于 **Azahar master-c9d2593-dirty (2026-06-03)** 版本修改而来的个人编辑版。
 
-![GitHub Downloads](https://img.shields.io/github/downloads/azahar-emu/azahar/total?logo=github&label=GitHub%20Downloads)
-![Google Play Downloads](https://playbadges.pavi2410.com/badge/downloads?id=io.github.lime3ds.android&pretty&label=Play%20Store%20Downloads)
-![Flathub Downloads](https://img.shields.io/flathub/downloads/org.azahar_emu.Azahar?logo=flathub&label=Flathub%20Downloads)
-![CI Build Status](https://github.com/azahar-emu/azahar/actions/workflows/build.yml/badge.svg)
-
-<b>Azahar</b> is an open-source 3DS emulator project based on Citra.
-
-It was created from the merging of PabloMK7's Citra fork and the Lime3DS project, both of which emerged shortly after Citra was taken down.
-
-The goal of this project is to be the de-facto platform for future development.
-
-# Installation
-
-### Windows
-
-Azahar is available as both an installer and a zip archive.
-
-Download the latest release in your preferred format from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-If you are unsure of whether you want to use MSVC or MSYS2, use MSYS2.
+This is a personal custom edition forked from **Azahar master-c9d2593-dirty (2026-06-03)**.
 
 ---
 
-### MacOS
+## 关于本分支 / About This Fork
 
-To download a build that will work on all Macs, you can download the `macos-universal` build on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
+### 中文
 
-Alternatively, if you wish to download a build specifically for your Mac, you can choose either:
+我使用 AI 工具创建了很多有趣的新功能。不过虽然它看起来很酷，
 
-- `macos-arm64` for Apple Silicon Macs
-- `macos-x86_64` for Intel Macs
+但由于新功能大量使用了 AI 编程，所以也许会有很多不可靠的代码。**我并不推荐将这些可能不可靠的内容合并进主分支。**
 
----
+我目前只计划小范围分享使用它，但分享就意味着我必须遵守原版模拟器的 GPLv2.0 协议将代码开源，所以……就是这样发生了 
 
-### Android
+目前我只在 Windows 中测试了它，效果还不错，其他平台一切未知。我也并没有精力后续继续维护它，目前它已经能做到让我满意的效果了。
 
-There are two variants of Azahar available on Android, those being the Vanilla and Google Play builds.
-
-The Vanilla build is technically superior, as it uses an alternative method of file management which is faster, but isn't permitted on the Google Play store.
-
-For most users, we currently recommended downloading Azahar on Android via the Google Play Store for ease of accessibility:
-
-<a href='https://play.google.com/store/apps/details?id=io.github.lime3ds.android'><img width='180' alt='Get it on Google Play' src='https://raw.githubusercontent.com/pioug/google-play-badges/06ccd9252af1501613da2ca28eaffe31307a4e6d/svg/English.svg'/></a>
-
-Alternatively, you can install the app using Obtainium, allowing you to use the Vanilla variant:
-1. Download and install Obtainium from [here](https://github.com/ImranR98/Obtainium/releases) (use the file named `app-release.apk`)
-2. Open Obtainium and click 'Add App'
-3. Type `https://github.com/azahar-emu/azahar` into the 'App Source URL' section
-4. Click 'Add'
-5. Click 'Install', and select the preferred variant
-
-If you wish, you can also simply install the latest APK from the [Releases](https://github.com/azahar-emu/azahar/releases) page.
-
-Keep in mind that you will not recieve automatic updates when installing via the APK.
+当然，这个模拟器的规范与主分支一样，同样使用 **GPLv2.0 协议**，且**不可用于非法取得的游戏**，请支持购买正版游戏。
 
 ---
 
-### Linux
+### English
 
-The recommended format for using Azahar on Linux is the Flatpak available on Flathub:
+I used AI tools to create many interesting new features. While it looks cool, a significant portion of the code is AI-generated, 
 
-<a href='https://flathub.org/apps/org.azahar_emu.Azahar'><img width='180' alt='Download on Flathub' src='https://dl.flathub.org/assets/badges/flathub-badge-en.png'/></a>
+which may introduce unreliable behaviors. **I do not recommend merging these potentially unstable changes into the main branch.**
 
-Azahar is also available as an AppImage on the [Releases](https://github.com/azahar-emu/azahar/releases) page.
+My current plan is to share this within a small circle. However, 
 
-There are two variants of the AppImage available, those being `azahar.AppImage` and `azahar-wayland.AppImage`.
+sharing means I must comply with the original emulator's GPLv2.0 license and open-source the code — so here we are 
 
-If you are unsure of which variant to use, we recommend using the default `azahar.AppImage`. This is because of upstream issues in the Wayland ecosystem which may cause problems when running the emulator (e.g. [#1162](https://github.com/azahar-emu/azahar/issues/1162)).
+I have only tested this on **Windows**, and it works well enough. Other platforms are completely untested. I don't have the energy to maintain it long-term; it has already reached a level I'm satisfied with.
 
-Unless you explicitly require native Wayland support (e.g. you are running a system with no Xwayland), the non-Wayland variant is recommended.
+Like the original project, this fork is licensed under **GPLv2.0**. **Do not use it with illegally obtained games** — please support official purchases.
 
-The Flatpak build of Azahar also has native Wayland support disabled by default. If you require native Wayland support, it can be enabled using [Flatseal](https://flathub.org/en/apps/com.github.tchx84.Flatseal).
+---
 
-# Build instructions
+## 最大改动 / Biggest Change
 
-Please refer this repository's [wiki](https://github.com/azahar-emu/azahar/wiki/Building-From-Source) for build instructions
+该分支最大的改动是**陀螺仪相关**的功能。有些游戏使用陀螺仪来模拟体感射击玩法，而原版 Azahar 无法做到这一点。
 
-# How can I contribute?
+The biggest change in this fork is **gyroscope/ motion controls**. Some games use gyroscope aiming, 
 
-### Pull requests
+which the original Azahar doesn't support. This fork allows you to control gyroscope rotation using just the **mouse and right analog stick**.
 
-If you want to implement a change and have the technical capability to do so, we would be happy to accept your contributions.
+> （鼠标在选中模拟器窗口时，会变为"对穿"模式穿透屏幕边界 — 这是预期行为，用于体感瞄准时的无边界鼠标操作。）
+>
+> (When the emulator window is focused, the mouse enters a "passthrough" mode — 
 
-If you are contributing a new feature, it is highly suggested that you first make a Feature Request issue to discuss the addition before writing any code. This is to ensure that your time isn't wasted working on a feature which isn't deemed appropriate for the project.
+it traverses screen boundaries freely. This is intended for uninterrupted gyro-aiming.)
 
-After creating a pull request, please don't repeatedly merge `master` into your branch. A maintainer will update the branch for you if/ when it is appropriate to do so.
+---
 
-### Language translations
+## 新增功能 / New Features
 
-Additionally, we are accepting language translations on [Transifex](https://app.transifex.com/azahar/azahar). If you know a non-english language listed on our Transifex page, please feel free to contribute.
+### 🎮 陀螺仪相关 / Gyroscope & Motion
 
-> [!NOTE]
-> We are not currently accepting new languages for translation. Please do not request for new languages or language variants to be added.
+| 功能 | Feature |
+|------|---------|
+| 鼠标操控陀螺仪，支持同时映射给左右摇杆/方向键 | Mouse-controlled gyroscope with simultaneous mapping to analog sticks & D-Pad |
+| 可设定陀螺仪初始角度（默认 90° 抬起，适用于射击游戏） | Configurable initial tilt angle (default 90° raised, ideal for shooters) |
+| 可限制陀螺仪最大倾斜角度 | Configurable maximum tilt angle |
+| 支持自动竖向倾斜 | Automatic vertical tilt |
+| [BETA] 自动横向倾斜 | [BETA] Automatic horizontal tilt |
+| 控制器联动：C-Stick / Circle Pad / D-Pad / ABXY → 虚拟鼠标体感 | Controller link: C-Stick / Circle Pad / D-Pad / ABXY → virtual mouse gyro |
 
-### Compatibility reports
+### 🖥️ 新的自定义布局（百分比版） / Custom Layout (Percentage-based)
 
-Even if you don't wish to contribute code or translations, you can help the project by reporting game compatibility data to our compatibility list.
+| 功能 | Feature |
+|------|---------|
+| 模拟器顶部栏可自动隐藏 | Auto-hide top toolbar |
+| 百分比版自定义布局，改变窗口比例时保持布局效果 | Percentage-based layout that scales with window resizing |
+| 给上下屏幕添加圆角和边缘模糊 | Rounded corners + edge blur for both screens |
+| 可选上下屏画面作为模糊背景 | Blurred screen background option |
 
-To do so, simply read https://github.com/azahar-emu/compatibility-list/blob/master/CONTRIBUTING.md and follow the instructions.
+### ⌨️ 按键输入 / Input Mapping
 
-Contributing compatibility data helps more accurately reflect the current capabilities of the emulator, so it would be highly appreciated if you could go through the reporting process after completing a game.
+| 功能 | Feature |
+|------|---------|
+| 跨手柄的自适应按键映射（以 Xbox 布局为主） | Cross-controller adaptive key mapping (Xbox layout based) |
+| 默认按键设定同时支持键盘和手柄 | Default bindings work with both keyboard and controller |
+| 单一按键支持多重映射和重复映射 | Multi-mapping and duplicate key bindings |
+| 按键可映射为下屏幕触屏坐标 | Bind keys to touch-screen coordinates |
+| 右键菜单可映射鼠标左右键和滚轮 | Right-click menu supports mouse button & scroll wheel binding |
 
-# Minimum requirements
+### 🎨 图形 / Graphics
 
-Below are the minimum requirements to run Azahar:
+| 功能 | Feature |
+|------|---------|
+| 更多自动内部分辨率选项 | More auto internal resolution options |
+| 同时使用多个后处理 Shader 滤镜（最多 10 个） | Multi-layer post-processing shader stacking (up to 10) |
+| 进入游戏时自动全屏 | Auto fullscreen on game launch |
 
-### Desktop
+---
 
-```
-Operating System: Windows 10 (64-bit), MacOS 13.4 (Ventura), or modern 64-bit Linux
-CPU: x86-64/ARM64 CPU (Windows for ARM not supported).
-     Single core performance higher than 1,800 on Passmark.
-     SSE4.2 required on x86_64.
-GPU: OpenGL 4.3 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
-```
-### Android
+## 构建说明 / Build Instructions
 
-```
-Operating System: Android 10.0+ (64-bit)
-CPU: Snapdragon 835 SoC or better
-GPU: OpenGL ES 3.2 or Vulkan 1.1 support
-Memory: 2GB of RAM. 4GB is recommended
-```
+请参照原仓库的构建 Wiki：[Building From Source](https://github.com/azahar-emu/azahar/wiki)
 
-# What's next?
+Please refer to the upstream build wiki: [Building From Source](https://github.com/azahar-emu/azahar/wiki)
 
-We share public roadmaps for upcoming releases in the form of GitHub milestones.
+---
 
-You can find these at https://github.com/azahar-emu/azahar/milestones.
+## 许可证 / License
 
-# Join the conversation
+**GPLv2.0** — 与上游项目一致。
 
-We have a community Discord server where you can chat about the project, keep up to date with the latest announcements, or coordinate emulator development.
-
-Join at https://discord.gg/4ZjMpAp3M6
+Same as upstream — licensed under **GPLv2.0**.

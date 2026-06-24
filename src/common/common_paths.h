@@ -18,7 +18,8 @@
 #endif
 
 // The user data dir
-#define USERDATA_DIR "user"
+// DiySC: 便携版用户数据目录（始终位于 exe 同级目录下，禁止改为系统路径）
+#define USERDATA_DIR "UserProfile"
 #ifdef USER_DIR
 #define EMU_DATA_DIR USER_DIR
 #else

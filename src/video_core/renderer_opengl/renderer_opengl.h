@@ -65,6 +65,7 @@ private:
                                      const Pica::FramebufferConfig& framebuffer,
                                      const Pica::ColorFill& color_fill);
     void DrawScreens(const Layout::FramebufferLayout& layout, bool flipped);
+    void DrawBackgroundFill(const Layout::FramebufferLayout& layout, bool flipped);
     void ApplySecondLayerOpacity(float opacity = 1.0f);
     void ResetSecondLayerOpacity();
     void DrawBottomScreen(const Layout::FramebufferLayout& layout,
@@ -91,6 +92,7 @@ private:
     OGLVertexArray vertex_array;
     OGLBuffer vertex_buffer;
     OGLProgram shader;
+    OGLProgram bg_fill_shader;
     OGLFramebuffer screenshot_framebuffer;
     std::array<OGLSampler, 2> samplers;
 
@@ -106,6 +108,61 @@ private:
     GLuint uniform_i_resolution;
     GLuint uniform_o_resolution;
     GLuint uniform_layer;
+
+    // DiySC: Rounded corner uniforms
+    GLuint uniform_screen_origin;
+    GLuint uniform_corner_radius;
+    GLuint uniform_bg_color;
+    GLuint uniform_edge_blur;
+    GLuint uniform_screen_opacity;
+
+    // DiySC: Vignette + overlay uniforms
+    GLuint uniform_vignette_enable;
+    GLuint uniform_vignette_color;
+    GLuint uniform_vignette_size;
+    GLuint uniform_overlay_enable;
+    GLuint uniform_overlay_color;
+
+    // DiySC: Background fill uniforms
+    GLuint bg_fill_uniform_modelview_matrix;
+    GLuint bg_fill_uniform_color_texture;
+    GLuint bg_fill_uniform_tex_size;
+    GLuint bg_fill_uniform_blur_sigma;
+    GLuint bg_fill_uniform_scale;
+    GLuint bg_fill_uniform_darken;
+    GLuint bg_fill_uniform_direction;
+    GLuint bg_fill_uniform_max_radius;
+
+    // DiySC: Intermediate FBO for separable Gaussian blur
+    OGLTexture bg_fill_intermediate_texture;
+    OGLFramebuffer bg_fill_intermediate_fbo;
+    u32 bg_fill_last_tex_w = 0;
+    u32 bg_fill_last_tex_h = 0;
+
+    // DiySC: Multi-filter stacking — ping-pong FBOs
+    OGLTexture filter_tex_a;
+    OGLFramebuffer filter_fbo_a;
+    OGLTexture filter_tex_b;
+    OGLFramebuffer filter_fbo_b;
+    OGLProgram filter_pass_shader;
+    u32 filter_fbo_w = 0;
+    u32 filter_fbo_h = 0;
+
+    // DiySC: Current screen clip values (set per-draw by DrawTopScreen/DrawBottomScreen)
+    float current_clip_left = 0.0f;
+    float current_clip_right = 0.0f;
+    float current_clip_top = 0.0f;
+    float current_clip_bottom = 0.0f;
+    float current_radius = 0.0f;
+    float current_edge_blur = 0.0f;
+    float current_opacity = 1.0f;
+    bool current_vignette_enabled = false;
+    std::array<float, 3> current_vignette_color = {0, 0, 0};
+    float current_vignette_size = 0.5f;
+    bool current_overlay_enabled = false;
+    std::array<float, 3> current_overlay_color = {0.5f, 0.5f, 0.5f};
+    float current_screen_x = 0.0f;
+    float current_screen_y = 0.0f;
 
     // Shader attribute input indices
     GLuint attrib_position;

@@ -53,6 +53,7 @@ control gyroscope rotation using just the **mouse and right analog stick**.
 
 鼠标在选中模拟器窗口时，会变为"对穿"模式穿透屏幕边界,
 这是预期行为，用于体感瞄准时的无边界鼠标操作。
+
 When the emulator window is focused, the mouse enters a "passthrough" mode,
 it traverses screen boundaries freely. This is intended for uninterrupted gyro-aiming.
 

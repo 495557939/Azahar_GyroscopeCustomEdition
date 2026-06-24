@@ -926,12 +926,16 @@ void GRenderWindow::PollControllerLink() {
     total_dx *= link_speed;
     total_dy *= link_speed;
 
-    if (total_dx == 0.0f && total_dy == 0.0f)
-        return;
-
     // Feed virtual delta to MotionEmu
     auto* motion_emu = InputCommon::GetMotionEmu();
     if (!motion_emu)
+        return;
+
+    // Feed horizontal stick delta to [BETA] Auto X-axis tilt
+    if (motion_param.Get("auto_tilt_x", false))
+        motion_emu->SetAutoRollTarget(total_dx);
+
+    if (total_dx == 0.0f && total_dy == 0.0f)
         return;
 
     auto mode = motion_emu->GetMode();

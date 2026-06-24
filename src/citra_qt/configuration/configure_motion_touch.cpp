@@ -255,7 +255,7 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
             auto* row_layout = new QHBoxLayout();
             row_layout->addWidget(new QLabel(tr("Auto X-tilt speed:"), this));
             motion_auto_tilt_speed = new QDoubleSpinBox(this);
-            motion_auto_tilt_speed->setRange(0.1, 3.0);
+            motion_auto_tilt_speed->setRange(0.1, 10.0);
             motion_auto_tilt_speed->setSingleStep(0.1);
             motion_auto_tilt_speed->setDecimals(1);
             motion_auto_tilt_speed->setValue(1.0);

@@ -177,6 +177,14 @@ public:
         return tilt_max_angle;
     }
 
+    // Feed an external horizontal input to auto X-tilt (e.g. right stick).
+    // Scale: ~20° at BUTTON_BASE=8 with speed=1, clamped ±90°.
+    void SetAutoRollTarget(float dx) {
+        std::lock_guard guard{tilt_mutex};
+        float target = dx * 2.5f * auto_tilt_speed;
+        auto_roll_target = std::clamp(target, -90.0f, 90.0f);
+    }
+
     std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() {
         // Per-frame sync: compute on-the-fly using actual inter-frame time.
         if (per_frame && mode != MotionEmuMode::Absolute) {
@@ -691,6 +699,10 @@ public:
         return device->GetTiltMaxAngle();
     }
 
+    void SetAutoRollTarget(float dx) {
+        device->SetAutoRollTarget(dx);
+    }
+
     std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() const override {
         return device->GetStatus();
     }
@@ -827,6 +839,12 @@ float MotionEmu::GetTiltMaxAngle() const {
         return ptr->GetTiltMaxAngle();
     }
     return 90.0f;
+}
+
+void MotionEmu::SetAutoRollTarget(float dx) {
+    if (auto ptr = current_device.lock()) {
+        ptr->SetAutoRollTarget(dx);
+    }
 }
 
 } // namespace InputCommon

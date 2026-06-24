@@ -85,6 +85,7 @@ public:
      */
     void GetInvertFlags(bool& out_pitch, bool& out_yaw) const;
     float GetTiltMaxAngle() const;
+    void SetAutoRollTarget(float dx);  // feed external horizontal input (e.g. right stick)
 
 private:
     std::weak_ptr<MotionEmuDevice> current_device;

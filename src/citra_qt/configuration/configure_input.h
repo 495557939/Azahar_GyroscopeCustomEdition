@@ -42,8 +42,13 @@ public:
     void LoadConfiguration();
     void EmitInputKeysChanged();
 
+protected:
+    void showEvent(QShowEvent* event) override;
+
+public:
     /// Save the current input profile index
     void ApplyProfile();
+
 public slots:
     void OnHotkeysChanged(QList<QKeySequence> new_key_list);
 

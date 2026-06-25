@@ -1010,6 +1010,13 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
 
 ConfigureInput::~ConfigureInput() = default;
 
+void ConfigureInput::showEvent(QShowEvent* event) {
+    QWidget::showEvent(event);
+    // Touch point extra buttons need the widget tree to be visible before
+    // setVisible(true) takes effect on pre-created hidden children.
+    UpdateTouchPointsMultiKeySlots();
+}
+
 void ConfigureInput::ApplyConfiguration() {
 
     Settings::values.use_artic_base_controller = ui->use_artic_controller->isChecked();
@@ -1122,10 +1129,6 @@ void ConfigureInput::LoadConfiguration() {
     UpdateButtonLabels();
     for (int i = 0; i < Settings::NativeButton::NumButtons; i++)
         UpdateMultiKeySlots(i);
-    // Defer touch-point visibility until the widget tree is shown.
-    // Pre-created hidden children require the parent to be visible before
-    // setVisible(true) takes effect.
-    QTimer::singleShot(0, this, [this] { UpdateTouchPointsMultiKeySlots(); });
     // Sync slider positions from loaded params
     for (int point = 0; point < (int)touch_point_widgets.size() &&
                         point < (int)touch_points_param.size();

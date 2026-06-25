@@ -190,6 +190,10 @@ static Settings::InputProfile ReadProfileFromQSettings(QSettings& settings) {
                 const int axis_y = (i == 0) ? 1 : 3;
                 auto add_sdl = [&](const std::string& dir, const std::string& sign,
                                    int axis) {
+                    // Only add SDL default if slot _1 is empty — don't overwrite
+                    // user's custom extra bindings.
+                    if (!analog_pkg.Get(dir + "_1", "").empty())
+                        return;
                     std::string sdl = "direction:" + sign + ",engine:sdl,gc_axis:" +
                                       std::to_string(axis) +
                                       ",port:0,threshold:0.5";

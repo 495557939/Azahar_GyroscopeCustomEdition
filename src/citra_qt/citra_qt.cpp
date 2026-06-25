@@ -451,6 +451,8 @@ GMainWindow::GMainWindow(Core::System& system_)
     ui->action_Close_Movie->setEnabled(movie_playback_on_start || movie_record_on_start);
 
     ConnectAppEvents();
+    // Always install event filter to prevent Alt key from activating the menu bar.
+    qApp->installEventFilter(this);
     ConnectMenuEvents();
     ConnectWidgetEvents();
 
@@ -3103,17 +3105,26 @@ void GMainWindow::OnToggleAutoHideMenu() {
     }
     auto_hide_menu_enabled_ = action_auto_hide_menu_->isChecked();
     if (auto_hide_menu_enabled_) {
-        qApp->installEventFilter(this);
         setMouseTracking(true);
         // Start with menu visible, timer will auto-hide after cursor leaves
         auto_hide_menu_timer_->start();
     } else {
-        qApp->removeEventFilter(this);
         ui->menubar->show();
     }
 }
 
 bool GMainWindow::eventFilter(QObject* object, QEvent* event) {
+    // Prevent Alt/Meta key from activating the menu bar by accepting
+    // ShortcutOverride. This tells Qt the key is handled by the application
+    // (as a game button) so it won't trigger menu bar focus.
+    if (event->type() == QEvent::ShortcutOverride) {
+        const auto* key_event = static_cast<QKeyEvent*>(event);
+        if (key_event->key() == Qt::Key_Alt || key_event->key() == Qt::Key_Meta) {
+            event->accept();
+            return true;
+        }
+    }
+
     if (auto_hide_menu_enabled_ && event->type() == QEvent::MouseMove) {
         // Must use window-relative coordinates via global pos —
         // the event's local pos is relative to whichever child widget

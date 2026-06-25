@@ -954,8 +954,12 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
         touchOuterLayout->addWidget(pointBox);
     }
 
-    // Hide all points/slots beyond what's actually configured
-    UpdateTouchPointsMultiKeySlots();
+    // Don't call UpdateTouchPointsMultiKeySlots here — touch points are pre-created
+    // (not lazily created like button slots). Visibility must be deferred until
+    // the widget tree is fully shown, otherwise setVisible(true) on hidden children
+    // has no effect.
+    // UpdateTouchPointsMultiKeySlots() is called via QTimer::singleShot at the end
+    // of LoadConfiguration().
 
     // Add to gridLayout_7, row 3 (below Misc/Shoulders), spanning both columns
         ui->gridLayout_7->addWidget(touchGroup, 3, 0, 1, 2);
@@ -1118,7 +1122,10 @@ void ConfigureInput::LoadConfiguration() {
     UpdateButtonLabels();
     for (int i = 0; i < Settings::NativeButton::NumButtons; i++)
         UpdateMultiKeySlots(i);
-    UpdateTouchPointsMultiKeySlots();
+    // Defer touch-point visibility until the widget tree is shown.
+    // Pre-created hidden children require the parent to be visible before
+    // setVisible(true) takes effect.
+    QTimer::singleShot(0, this, [this] { UpdateTouchPointsMultiKeySlots(); });
     // Sync slider positions from loaded params
     for (int point = 0; point < (int)touch_point_widgets.size() &&
                         point < (int)touch_points_param.size();

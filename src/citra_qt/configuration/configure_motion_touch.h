@@ -95,6 +95,15 @@ private:
     QCheckBox* link_abxy = nullptr;
     QDoubleSpinBox* link_speed = nullptr;
     QWidget* link_group = nullptr;  // parent widget for all link controls
+    // Per-link invert checkboxes
+    QCheckBox* link_cstick_invert_ud = nullptr;
+    QCheckBox* link_cstick_invert_lr = nullptr;
+    QCheckBox* link_circle_pad_invert_ud = nullptr;
+    QCheckBox* link_circle_pad_invert_lr = nullptr;
+    QCheckBox* link_dpad_invert_ud = nullptr;
+    QCheckBox* link_dpad_invert_lr = nullptr;
+    QCheckBox* link_abxy_invert_ud = nullptr;
+    QCheckBox* link_abxy_invert_lr = nullptr;
 
     // Used for SDL input polling
     std::string guid;

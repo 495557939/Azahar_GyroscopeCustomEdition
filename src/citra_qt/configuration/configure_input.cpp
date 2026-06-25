@@ -118,7 +118,7 @@ static void SetAnalogButtonN(Common::ParamPackage& p, const std::string& dir, in
         p.Erase(dir);
     }
     p.Set(dir + "_" + std::to_string(n), input.Serialize());
-    int new_cnt = n + 1;
+    int new_cnt = std::max(n + 1, old_cnt);
     // Remove orphaned bindings beyond the new count
     for (int i = new_cnt; i < old_cnt; i++)
         p.Erase(dir + "_" + std::to_string(i));

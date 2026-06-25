@@ -4,7 +4,10 @@
 
 #include <algorithm>
 #include <array>
+#include <QDir>
+#include <QFile>
 #include <QKeySequence>
+#include <QSet>
 #include <QSettings>
 #include <QVariant>
 #include <QVector>
@@ -30,6 +33,230 @@ QtConfig::~QtConfig() {
     if (global) {
         Save();
     }
+}
+
+// ── ButtonPreset file helpers ───────────────────────────────────────────────
+
+static std::string GetButtonPresetDir() {
+    return FileUtil::GetUserPath(FileUtil::UserPath::ConfigDir) + "ButtonPreset/";
+}
+
+static std::string SanitizeFileName(const std::string& name) {
+    std::string result;
+    result.reserve(name.size());
+    for (char c : name) {
+        if (static_cast<unsigned char>(c) < 32) {
+            result += '_';
+            continue;
+        }
+        switch (c) {
+        case '<': case '>': case ':': case '"': case '/':
+        case '\\': case '|': case '?': case '*':
+            result += '_';
+            break;
+        default:
+            result += c;
+        }
+    }
+    // Trim trailing spaces and dots (Windows restriction)
+    while (!result.empty() && (result.back() == ' ' || result.back() == '.'))
+        result.pop_back();
+    if (result.empty())
+        result = "unnamed";
+    return result;
+}
+
+static void WriteProfileFile(const std::string& path, const Settings::InputProfile& profile) {
+    QSettings f(QString::fromStdString(path), QSettings::IniFormat);
+    f.clear();
+    f.setValue(QStringLiteral("name"), QString::fromStdString(profile.name));
+    for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+        const QString btnKey = QString::fromStdString(Settings::NativeButton::mapping[i]);
+        f.beginWriteArray(btnKey);
+        int writeIdx = 0;
+        for (const auto& bind : profile.buttons[i]) {
+            if (bind.empty()) continue;
+            f.setArrayIndex(writeIdx++);
+            f.setValue(QStringLiteral("bind"), QString::fromStdString(bind));
+        }
+        f.endArray();
+        f.setValue(btnKey + QStringLiteral("/size"), writeIdx);
+    }
+    for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+        f.setValue(QString::fromStdString(Settings::NativeAnalog::mapping[i]),
+                   QString::fromStdString(profile.analogs[i]));
+    }
+    f.setValue(QStringLiteral("motion_device"), QString::fromStdString(profile.motion_device));
+    f.setValue(QStringLiteral("touch_device"), QString::fromStdString(profile.touch_device));
+    f.setValue(QStringLiteral("use_touchpad"), profile.use_touchpad);
+    f.setValue(QStringLiteral("controller_touch_device"),
+               QString::fromStdString(profile.controller_touch_device));
+    f.setValue(QStringLiteral("use_touch_from_button"), profile.use_touch_from_button);
+    f.setValue(QStringLiteral("touch_from_button_map"), profile.touch_from_button_map_index);
+    f.setValue(QStringLiteral("udp_input_address"), QString::fromStdString(profile.udp_input_address));
+    f.setValue(QStringLiteral("udp_input_port"), profile.udp_input_port);
+    f.setValue(QStringLiteral("udp_pad_index"), profile.udp_pad_index);
+    // Touch screen coordinate bindings
+    f.beginWriteArray(QStringLiteral("touch_points"));
+    for (std::size_t t = 0; t < profile.touch_points.size(); ++t) {
+        f.setArrayIndex(static_cast<int>(t));
+        f.beginWriteArray(QStringLiteral("keys"));
+        for (std::size_t k = 0; k < profile.touch_points[t].size(); ++k) {
+            f.setArrayIndex(static_cast<int>(k));
+            f.setValue(QStringLiteral("bind"),
+                       QString::fromStdString(profile.touch_points[t][k]));
+        }
+        f.endArray();
+    }
+    f.endArray();
+    f.sync();
+}
+
+static Settings::InputProfile ReadProfileFromQSettings(QSettings& settings) {
+    Settings::InputProfile profile;
+    profile.name = settings.value(QStringLiteral("name"), QStringLiteral("Default"))
+                       .toString().toStdString();
+    for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
+        const QString btnKey = QString::fromUtf8(Settings::NativeButton::mapping[i]);
+        const int numBinds = settings.beginReadArray(btnKey);
+        profile.buttons[i].clear();
+        for (int j = 0; j < numBinds && j < Settings::MAX_BINDINGS_PER_BUTTON; ++j) {
+            settings.setArrayIndex(j);
+            QString bindVal = settings.value(QStringLiteral("bind"), QString()).toString();
+            if (!bindVal.isEmpty()) {
+                profile.buttons[i].push_back(bindVal.toStdString());
+            }
+        }
+        settings.endArray();
+        const bool was_saved = settings.contains(btnKey + QStringLiteral("/size"));
+        if (profile.buttons[i].empty() && !was_saved) {
+            for (const auto& b : QtConfig::default_buttons[i])
+                profile.buttons[i].push_back(b);
+            switch (i) {
+            case Settings::NativeButton::Up:
+                profile.buttons[i].push_back("engine:sdl,gc_button:11,port:0");
+                break;
+            case Settings::NativeButton::Down:
+                profile.buttons[i].push_back("engine:sdl,gc_button:12,port:0");
+                break;
+            case Settings::NativeButton::Left:
+                profile.buttons[i].push_back("engine:sdl,gc_button:13,port:0");
+                break;
+            case Settings::NativeButton::Right:
+                profile.buttons[i].push_back("engine:sdl,gc_button:14,port:0");
+                break;
+            case Settings::NativeButton::L:
+                profile.buttons[i].push_back("engine:sdl,gc_button:9,port:0");
+                break;
+            case Settings::NativeButton::R:
+                profile.buttons[i].push_back("engine:sdl,gc_button:10,port:0");
+                break;
+            case Settings::NativeButton::ZL:
+                profile.buttons[i].push_back(
+                    "direction:+,engine:sdl,gc_axis:4,port:0,threshold:0.5");
+                break;
+            case Settings::NativeButton::ZR:
+                profile.buttons[i].push_back(
+                    "direction:+,engine:sdl,gc_axis:5,port:0,threshold:0.5");
+                break;
+            }
+        }
+    }
+    for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
+        std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
+            QtConfig::default_analogs[i][0], QtConfig::default_analogs[i][1],
+            QtConfig::default_analogs[i][2], QtConfig::default_analogs[i][3],
+            QtConfig::default_analogs[i][4], 0.5f);
+        profile.analogs[i] =
+            settings
+                .value(QString::fromStdString(Settings::NativeAnalog::mapping[i]),
+                       QString::fromStdString(default_param))
+                .toString()
+                .toStdString();
+        if (profile.analogs[i].empty())
+            profile.analogs[i] = default_param;
+        {
+            Common::ParamPackage analog_pkg(profile.analogs[i]);
+            if (analog_pkg.Get("engine", "") == "analog_from_button") {
+                for (const auto* dir : {"up", "down", "left", "right"}) {
+                    const std::string val = analog_pkg.Get(dir, "");
+                    if (!val.empty()) {
+                        analog_pkg.Set(std::string(dir) + "_0", val);
+                        analog_pkg.Erase(dir);
+                        analog_pkg.Set(std::string(dir) + "_count", 1);
+                    }
+                }
+                const int axis_x = (i == 0) ? 0 : 2;
+                const int axis_y = (i == 0) ? 1 : 3;
+                auto add_sdl = [&](const std::string& dir, const std::string& sign,
+                                   int axis) {
+                    std::string sdl = "direction:" + sign + ",engine:sdl,gc_axis:" +
+                                      std::to_string(axis) +
+                                      ",port:0,threshold:0.5";
+                    analog_pkg.Set(dir + "_1", sdl);
+                    analog_pkg.Set(dir + "_count", 2);
+                };
+                add_sdl("up", "-", axis_y);
+                add_sdl("down", "+", axis_y);
+                add_sdl("left", "-", axis_x);
+                add_sdl("right", "+", axis_x);
+            }
+            profile.analogs[i] = analog_pkg.Serialize();
+        }
+    }
+    profile.motion_device =
+        settings
+            .value(QStringLiteral("motion_device"),
+                   QStringLiteral("engine:motion_emu,update_period:20,sensitivity:0.075,"
+                                  "tilt_clamp:90.0,tilt_max_angle:90.0,"
+                                  "mode:rate_continuous,default_tilt:90,"
+                                  "invert_pitch:true,invert_yaw:false,per_frame:true,"
+                                  "clamp_pitch_180:true,auto_tilt_y:true,"
+                                  "auto_tilt_y_invert:false,auto_tilt_x:false,"
+                                  "auto_tilt_speed:1.0"))
+            .toString()
+            .toStdString();
+    profile.touch_device =
+        settings.value(QStringLiteral("touch_device"), QStringLiteral("engine:emu_window"))
+            .toString()
+            .toStdString();
+    profile.use_touchpad = settings.value(QStringLiteral("use_touchpad"), false).toBool();
+    profile.controller_touch_device =
+        settings.value(QStringLiteral("controller_touch_device"), QStringLiteral(""))
+            .toString()
+            .toStdString();
+    profile.use_touch_from_button =
+        settings.value(QStringLiteral("use_touch_from_button"), false).toBool();
+    profile.touch_from_button_map_index =
+        settings.value(QStringLiteral("touch_from_button_map"), 0).toInt();
+    profile.udp_input_address =
+        settings
+            .value(QStringLiteral("udp_input_address"),
+                   QString::fromUtf8(InputCommon::CemuhookUDP::DEFAULT_ADDR))
+            .toString()
+            .toStdString();
+    profile.udp_input_port =
+        static_cast<u16>(settings.value(QStringLiteral("udp_input_port"),
+                                        InputCommon::CemuhookUDP::DEFAULT_PORT)
+                             .toInt());
+    profile.udp_pad_index =
+        static_cast<u8>(settings.value(QStringLiteral("udp_pad_index"), 0).toUInt());
+    int num_touch = settings.beginReadArray(QStringLiteral("touch_points"));
+    for (int t = 0; t < num_touch; ++t) {
+        settings.setArrayIndex(t);
+        std::vector<std::string> point_keys;
+        int num_keys = settings.beginReadArray(QStringLiteral("keys"));
+        for (int k = 0; k < num_keys; ++k) {
+            settings.setArrayIndex(k);
+            QString val = settings.value(QStringLiteral("bind"), QString()).toString();
+            if (!val.isEmpty())
+                point_keys.push_back(val.toStdString());
+        }
+        settings.endArray();
+        profile.touch_points.push_back(std::move(point_keys));
+    }
+    settings.endArray();
+    return profile;
 }
 
 // Default button bindings — keyboard + SDL gc_button (Xbox / PS3 / PS4 / PS5).
@@ -399,176 +626,61 @@ void QtConfig::ReadControlValues() {
 
     Settings::values.current_input_profile_index = ReadSetting(Settings::QKeys::profile, 0).toInt();
 
-    const auto append_profile = [this, num_touch_from_button_maps] {
-        Settings::InputProfile profile;
-        profile.name =
-            ReadSetting(Settings::QKeys::name, QStringLiteral("Default")).toString().toStdString();
-        for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
-            // Multi-key mapping: read array of bindings per button
-            const QString btnKey = QString::fromUtf8(Settings::NativeButton::mapping[i]);
-            const int numBinds = qt_config->beginReadArray(btnKey);
-            profile.buttons[i].clear();
-            for (int j = 0; j < numBinds && j < Settings::MAX_BINDINGS_PER_BUTTON; ++j) {
-                qt_config->setArrayIndex(j);
-                QString bindVal = ReadSetting(QStringLiteral("bind"), QString())
-                                     .toString();
-                if (!bindVal.isEmpty()) {
-                    profile.buttons[i].push_back(bindVal.toStdString());
-                }
-            }
-            qt_config->endArray();
-            // Only push defaults if the array was never explicitly saved.
-            const bool was_saved = qt_config->contains(btnKey + QStringLiteral("/size"));
-            if (profile.buttons[i].empty() && !was_saved) {
-                for (const auto& b : default_buttons[i])
-                    profile.buttons[i].push_back(b);
-                // Explicitly add SDL virtual controller defaults.
-                // (Brace-init of std::vector<string> in default_buttons hits a
-                //  toolchain bug where only the first string is kept when there
-                //  are exactly 2 entries.)
-                switch (i) {
-                case Settings::NativeButton::Up:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:11,port:0");
-                    break;
-                case Settings::NativeButton::Down:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:12,port:0");
-                    break;
-                case Settings::NativeButton::Left:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:13,port:0");
-                    break;
-                case Settings::NativeButton::Right:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:14,port:0");
-                    break;
-                case Settings::NativeButton::L:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:9,port:0");
-                    break;
-                case Settings::NativeButton::R:
-                    profile.buttons[i].push_back("engine:sdl,gc_button:10,port:0");
-                    break;
-                case Settings::NativeButton::ZL:
-                    profile.buttons[i].push_back(
-                        "direction:+,engine:sdl,gc_axis:4,port:0,threshold:0.5");
-                    break;
-                case Settings::NativeButton::ZR:
-                    profile.buttons[i].push_back(
-                        "direction:+,engine:sdl,gc_axis:5,port:0,threshold:0.5");
-                    break;
-                }
-            }
-        }
-        for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
-            std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
-                default_analogs[i][0], default_analogs[i][1], default_analogs[i][2],
-                default_analogs[i][3], default_analogs[i][4], 0.5f);
-            profile.analogs[i] =
-                ReadSetting(QString::fromStdString(Settings::NativeAnalog::mapping[i]),
-                            QString::fromStdString(default_param))
-                    .toString()
-                    .toStdString();
-            if (profile.analogs[i].empty())
-                profile.analogs[i] = default_param;
+    // Read profiles from individual ButtonPreset files (new path) or
+    // fall back to the legacy qt-config profiles array.
+    const std::string preset_dir = GetButtonPresetDir();
+    const QDir presetDir(QString::fromStdString(preset_dir));
+    const QStringList iniFiles = presetDir.entryList({QStringLiteral("*.ini")}, QDir::Files,
+                                                       QDir::Name);
 
-            // Add SDL virtual controller stick defaults as multi-key bindings.
-            // Circle Pad (i=0) → gc_axis LeftX(0)/LeftY(1)
-            // CStick   (i=1) → gc_axis RightX(2)/RightY(3)
-            {
-                Common::ParamPackage analog_pkg(profile.analogs[i]);
-                if (analog_pkg.Get("engine", "") == "analog_from_button") {
-                    // Move old-format keys (e.g. "up") to _0 multi-key format so
-                    // CreateMultiDevices picks them up when _count > 0.
-                    for (const auto* dir : {"up", "down", "left", "right"}) {
-                        const std::string val = analog_pkg.Get(dir, "");
-                        if (!val.empty()) {
-                            analog_pkg.Set(std::string(dir) + "_0", val);
-                            analog_pkg.Erase(dir);  // remove legacy single key
-                            analog_pkg.Set(std::string(dir) + "_count", 1);
-                        }
-                    }
-                    // Add SDL virtual controller stick defaults as secondary multi-key bindings.
-                    // Circle Pad (i=0) → gc_axis LeftX(0)/LeftY(1)
-                    // CStick   (i=1) → gc_axis RightX(2)/RightY(3)
-                    const int axis_x = (i == 0) ? 0 : 2;
-                    const int axis_y = (i == 0) ? 1 : 3;
-                    auto add_sdl = [&](const std::string& dir, const std::string& sign,
-                                       int axis) {
-                        std::string sdl = "direction:" + sign + ",engine:sdl,gc_axis:" +
-                                          std::to_string(axis) + ",port:0,threshold:0.5";
-                        analog_pkg.Set(dir + "_1", sdl);
-                        analog_pkg.Set(dir + "_count", 2);
-                    };
-                    add_sdl("up", "-", axis_y);
-                    add_sdl("down", "+", axis_y);
-                    add_sdl("left", "-", axis_x);
-                    add_sdl("right", "+", axis_x);
-                }
-                profile.analogs[i] = analog_pkg.Serialize();
-            }
+    int num_input_profiles = 0;
+
+    if (!iniFiles.isEmpty()) {
+        // New path: read profiles from individual .ini files
+        for (const auto& filename : iniFiles) {
+            QSettings profileFile(presetDir.filePath(filename), QSettings::IniFormat);
+            auto profile = ReadProfileFromQSettings(profileFile);
+            profile.touch_from_button_map_index =
+                std::clamp(profile.touch_from_button_map_index, 0,
+                           num_touch_from_button_maps - 1);
+            Settings::values.input_profiles.emplace_back(std::move(profile));
         }
-        profile.motion_device =
-            ReadSetting(Settings::QKeys::motion_device,
-                        QStringLiteral(
-                            "engine:motion_emu,update_period:20,sensitivity:0.075,tilt_clamp:90.0,tilt_max_angle:90.0,mode:rate_continuous,default_tilt:90,invert_pitch:true,invert_yaw:false,per_frame:true,clamp_pitch_180:true,auto_tilt_y:true,auto_tilt_y_invert:false,auto_tilt_x:false,auto_tilt_speed:1.0"))
-                .toString()
-                .toStdString();
-        profile.touch_device =
-            ReadSetting(Settings::QKeys::touch_device, QStringLiteral("engine:emu_window"))
-                .toString()
-                .toStdString();
-        profile.use_touchpad = ReadSetting(Settings::QKeys::use_touchpad, false).toBool();
-        profile.controller_touch_device =
-            ReadSetting(Settings::QKeys::controller_touch_device, QStringLiteral(""))
-                .toString()
-                .toStdString();
-        profile.use_touch_from_button =
-            ReadSetting(Settings::QKeys::use_touch_from_button, false).toBool();
-        profile.touch_from_button_map_index =
-            ReadSetting(Settings::QKeys::touch_from_button_map, 0).toInt();
-        profile.touch_from_button_map_index =
-            std::clamp(profile.touch_from_button_map_index, 0, num_touch_from_button_maps - 1);
-        profile.udp_input_address =
-            ReadSetting(Settings::QKeys::udp_input_address,
-                        QString::fromUtf8(InputCommon::CemuhookUDP::DEFAULT_ADDR))
-                .toString()
-                .toStdString();
-        profile.udp_input_port = static_cast<u16>(
-            ReadSetting(Settings::QKeys::udp_input_port, InputCommon::CemuhookUDP::DEFAULT_PORT)
-                .toInt());
-        profile.udp_pad_index =
-            static_cast<u8>(ReadSetting(Settings::QKeys::udp_pad_index, 0).toUInt());
+        num_input_profiles = static_cast<int>(Settings::values.input_profiles.size());
+        // Read use_adaptive_controller_mapping from qt-config (not stored per-file)
         Settings::values.use_adaptive_controller_mapping =
             ReadSetting(QStringLiteral("use_adaptive_controller_mapping"), true).toBool();
-        // Touch screen coordinate bindings (nested: points -> keys)
-        int num_touch = qt_config->beginReadArray(QStringLiteral("touch_points"));
-        for (int t = 0; t < num_touch; ++t) {
-            qt_config->setArrayIndex(t);
-            std::vector<std::string> point_keys;
-            int num_keys = qt_config->beginReadArray(QStringLiteral("keys"));
-            for (int k = 0; k < num_keys; ++k) {
-                qt_config->setArrayIndex(k);
-                QString val = ReadSetting(Settings::QKeys::bind, QString()).toString();
-                if (!val.isEmpty())
-                    point_keys.push_back(val.toStdString());
-            }
-            qt_config->endArray();
-            profile.touch_points.push_back(std::move(point_keys));
+    } else {
+        // Legacy path: read profiles from qt-config profiles array
+        int legacy_profiles = qt_config->beginReadArray(QStringLiteral("profiles"));
+
+        for (int i = 0; i < legacy_profiles; ++i) {
+            qt_config->setArrayIndex(i);
+            auto profile = ReadProfileFromQSettings(*qt_config);
+            profile.touch_from_button_map_index =
+                std::clamp(profile.touch_from_button_map_index, 0,
+                           num_touch_from_button_maps - 1);
+            // Per-profile adaptive mapping (last-read wins, same as original)
+            Settings::values.use_adaptive_controller_mapping =
+                ReadSetting(QStringLiteral("use_adaptive_controller_mapping"), true)
+                    .toBool();
+            Settings::values.input_profiles.emplace_back(std::move(profile));
         }
+
         qt_config->endArray();
-        Settings::values.input_profiles.emplace_back(std::move(profile));
-    };
 
-    int num_input_profiles = qt_config->beginReadArray(QStringLiteral("profiles"));
-
-    for (int i = 0; i < num_input_profiles; ++i) {
-        qt_config->setArrayIndex(i);
-        append_profile();
-    }
-
-    qt_config->endArray();
-
-    // create a input profile if no input profiles exist, with the default or old settings
-    if (num_input_profiles == 0) {
-        append_profile();
-        num_input_profiles = 1;
+        // create a input profile if no input profiles exist
+        if (legacy_profiles == 0) {
+            auto profile = ReadProfileFromQSettings(*qt_config);
+            profile.touch_from_button_map_index =
+                std::clamp(profile.touch_from_button_map_index, 0,
+                           num_touch_from_button_maps - 1);
+            Settings::values.use_adaptive_controller_mapping =
+                ReadSetting(QStringLiteral("use_adaptive_controller_mapping"), true)
+                    .toBool();
+            Settings::values.input_profiles.emplace_back(std::move(profile));
+            legacy_profiles = 1;
+        }
+        num_input_profiles = legacy_profiles;
     }
 
     // ensure that the current input profile index is valid.
@@ -1162,68 +1274,36 @@ void QtConfig::SaveControlValues() {
     WriteBasicSetting(Settings::values.use_artic_base_controller);
 
     WriteSetting(Settings::QKeys::profile, Settings::values.current_input_profile_index, 0);
-    qt_config->beginWriteArray(QStringLiteral("profiles"));
-    for (std::size_t p = 0; p < Settings::values.input_profiles.size(); ++p) {
-        qt_config->setArrayIndex(static_cast<int>(p));
-        const auto& profile = Settings::values.input_profiles[p];
-        WriteSetting(Settings::QKeys::name, QString::fromStdString(profile.name),
-                     QStringLiteral("default"));
-        for (int i = 0; i < Settings::NativeButton::NumButtons; ++i) {
-            // Multi-key mapping: write array of bindings per button
-            const QString btnKey = QString::fromStdString(Settings::NativeButton::mapping[i]);
-            qt_config->beginWriteArray(btnKey);
-            int writeIdx = 0;
-            for (const auto& bind : profile.buttons[i]) {
-                if (bind.empty()) continue;
-                qt_config->setArrayIndex(writeIdx++);
-                WriteSetting(QStringLiteral("bind"), QString::fromStdString(bind));
+
+    // Write profiles as individual .ini files under ButtonPreset/
+    {
+        const std::string preset_dir = GetButtonPresetDir();
+        FileUtil::CreateFullPath(preset_dir);
+        const QDir pDir(QString::fromStdString(preset_dir));
+        QSet<QString> expectedFiles;
+
+        for (std::size_t p = 0; p < Settings::values.input_profiles.size(); ++p) {
+            const auto& profile = Settings::values.input_profiles[p];
+            std::string filename =
+                std::to_string(p) + "_" + SanitizeFileName(profile.name) + ".ini";
+            expectedFiles.insert(QString::fromStdString(filename));
+            WriteProfileFile(preset_dir + filename, profile);
+        }
+
+        // Clean up stale .ini files (deleted / renamed profiles)
+        for (const auto& entry : pDir.entryInfoList({QStringLiteral("*.ini")}, QDir::Files)) {
+            if (!expectedFiles.contains(entry.fileName())) {
+                QFile::remove(entry.absoluteFilePath());
             }
-            qt_config->endArray();
-            // Explicitly set size so empty arrays are detectable on load
-            qt_config->setValue(btnKey + QStringLiteral("/size"), writeIdx);
         }
-        for (int i = 0; i < Settings::NativeAnalog::NumAnalogs; ++i) {
-            std::string default_param = InputCommon::GenerateAnalogParamFromKeys(
-                default_analogs[i][0], default_analogs[i][1], default_analogs[i][2],
-                default_analogs[i][3], default_analogs[i][4], 0.5f);
-            WriteSetting(QString::fromStdString(Settings::NativeAnalog::mapping[i]),
-                         QString::fromStdString(profile.analogs[i]),
-                         QString::fromStdString(default_param));
-        }
-        WriteSetting(
-            Settings::QKeys::motion_device, QString::fromStdString(profile.motion_device),
-            QStringLiteral("engine:motion_emu,update_period:20,sensitivity:0.075,tilt_clamp:90.0,tilt_max_angle:90.0,mode:rate_continuous,default_tilt:90,invert_pitch:true,invert_yaw:false,per_frame:true,clamp_pitch_180:true,auto_tilt_y:true,auto_tilt_y_invert:false,auto_tilt_x:false,auto_tilt_speed:1.0"));
-        WriteSetting(Settings::QKeys::touch_device, QString::fromStdString(profile.touch_device),
-                     QStringLiteral("engine:emu_window"));
-        WriteSetting(Settings::QKeys::use_touchpad, profile.use_touchpad, false);
-        WriteSetting(Settings::QKeys::controller_touch_device,
-                     QString::fromStdString(profile.controller_touch_device), QStringLiteral(""));
-        WriteSetting(Settings::QKeys::use_touch_from_button, profile.use_touch_from_button, false);
-        WriteSetting(Settings::QKeys::touch_from_button_map, profile.touch_from_button_map_index,
-                     0);
-        WriteSetting(Settings::QKeys::udp_input_address,
-                     QString::fromStdString(profile.udp_input_address),
-                     QString::fromUtf8(InputCommon::CemuhookUDP::DEFAULT_ADDR));
-        WriteSetting(Settings::QKeys::udp_input_port, profile.udp_input_port,
-                     InputCommon::CemuhookUDP::DEFAULT_PORT);
-        WriteSetting(Settings::QKeys::udp_pad_index, profile.udp_pad_index, 0);
-        WriteSetting(QStringLiteral("use_adaptive_controller_mapping"),
-                     Settings::values.use_adaptive_controller_mapping.GetValue(), true);
-        // Touch screen coordinate bindings (nested: points -> keys)
-        qt_config->beginWriteArray(QStringLiteral("touch_points"));
-        for (std::size_t t = 0; t < profile.touch_points.size(); ++t) {
-            qt_config->setArrayIndex(static_cast<int>(t));
-            qt_config->beginWriteArray(QStringLiteral("keys"));
-            for (std::size_t k = 0; k < profile.touch_points[t].size(); ++k) {
-                qt_config->setArrayIndex(static_cast<int>(k));
-                WriteSetting(Settings::QKeys::bind,
-                             QString::fromStdString(profile.touch_points[t][k]));
-            }
-            qt_config->endArray();
-        }
-        qt_config->endArray();
     }
-    qt_config->endArray();
+
+    // Remove legacy profiles array from qt-config so next load picks up files
+    qt_config->remove(QStringLiteral("profiles"));
+
+    // Write adaptive controller mapping to qt-config (not per-profile)
+    WriteSetting(QStringLiteral("use_adaptive_controller_mapping"),
+                 Settings::values.use_adaptive_controller_mapping.GetValue(), true);
 
     qt_config->beginWriteArray(Settings::QKeys::touch_from_button_maps);
     for (std::size_t p = 0; p < Settings::values.touch_from_button_maps.size(); ++p) {

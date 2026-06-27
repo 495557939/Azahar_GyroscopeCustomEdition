@@ -392,6 +392,36 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
         }
     }
 
+    // Wrap analog primary buttons that sit directly in a QGridLayout into a
+    // QVBoxLayout so the extra-slot container can be inserted the same way as
+    // the UpLeft button (which already uses a verticalLayout in the .ui).
+    for (int a = 0; a < Settings::NativeAnalog::NumAnalogs; a++) {
+        for (int s = 0; s < ANALOG_SUB_BUTTONS_NUM; s++) {
+            if (analog_map_buttons[a][s].empty()) continue;
+            QPushButton* btn = analog_map_buttons[a][s][0];
+            if (!btn) continue;
+            QLayout* parentLayout = nullptr;
+            // Find the layout that directly contains this button
+            for (QWidget* p = btn->parentWidget(); p; p = p->parentWidget()) {
+                if (auto* lay = p->layout()) {
+                    if (lay->indexOf(btn) >= 0) {
+                        parentLayout = lay;
+                        break;
+                    }
+                }
+            }
+            if (auto* grid = qobject_cast<QGridLayout*>(parentLayout)) {
+                // Button is directly in a grid — wrap it in a QVBoxLayout
+                QWidget* wrap = new QWidget(btn->parentWidget());
+                QVBoxLayout* wl = new QVBoxLayout(wrap);
+                wl->setContentsMargins(0, 0, 0, 0);
+                wl->setSpacing(1);
+                grid->replaceWidget(btn, wrap);
+                wl->addWidget(btn);
+            }
+        }
+    }
+
     analog_map_stick = {ui->buttonCircleAnalog, ui->buttonCStickAnalog};
     analog_map_deadzone_and_modifier_slider = {ui->sliderCirclePadDeadzoneAndModifier,
                                                ui->sliderCStickDeadzoneAndModifier};
@@ -2031,11 +2061,7 @@ void ConfigureInput::UpdateAnalogMultiKeySlots(int analog_id, int sub_button_id)
     if (hasExtras && !inLayout) {
         if (auto* box = qobject_cast<QBoxLayout*>(leafLayout))
             box->insertWidget(btnIdx + 1, container);
-        else if (auto* grid = qobject_cast<QGridLayout*>(leafLayout)) {
-            int row, col, rowSpan, colSpan;
-            grid->getItemPosition(btnIdx, &row, &col, &rowSpan, &colSpan);
-            grid->addWidget(container, row + rowSpan, col, 1, colSpan);
-        }
+        // Grid buttons were wrapped in VBoxLayout at init; no grid branch needed
     } else if (!hasExtras && inLayout) {
         leafLayout->removeWidget(container);
     }

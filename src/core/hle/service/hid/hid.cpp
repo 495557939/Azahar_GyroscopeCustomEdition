@@ -116,27 +116,40 @@ DirectionState GetStickDirectionState(s16 circle_pad_x, s16 circle_pad_y) {
     return state;
 }
 
+static std::vector<bool> s_is_latch[Settings::NativeButton::NUM_BUTTONS_HID];
+static std::vector<bool> s_dev_prev[Settings::NativeButton::NUM_BUTTONS_HID];
+
 void Module::LoadInputDevices() {
     LOG_DEBUG(Frontend, "Loading input devices");
     // Multi-key mapping: create devices for all bindings per button
     for (int i = 0; i < Settings::NativeButton::NUM_BUTTONS_HID; ++i) {
         buttons[i].clear();
         button_toggle[i] = false;
+        s_is_latch[i].clear();
+        s_dev_prev[i].clear();
+        bool button_has_latch = false;
         for (const auto& bind : Settings::values.current_input_profile.buttons[
                  i + Settings::NativeButton::BUTTON_HID_BEGIN]) {
             if (!bind.empty()) {
                 auto dev = Input::CreateDevice<Input::ButtonDevice>(bind);
                 if (dev) {
                     Common::ParamPackage pkg(bind);
-                    if (pkg.Get("toggle", "0") == "1") {
-                        button_toggle[i] = true;  // whole-button toggle
+                    bool is_latch_dev = pkg.Get("latch", "0") == "1";
+                    if (is_latch_dev) {
+                        button_has_latch = true;
+                        dev = std::make_unique<InputCommon::ToggleButton>(std::move(dev), i);
+                    } else if (pkg.Get("toggle", "0") == "1") {
+                        button_toggle[i] = true;
                     } else if (pkg.Get("turbo", "0") == "1") {
                         dev = std::make_unique<InputCommon::TurboButton>(std::move(dev));
                     }
+                    s_is_latch[i].push_back(is_latch_dev);
+                    s_dev_prev[i].push_back(false);
                     buttons[i].push_back(std::move(dev));
                 }
             }
         }
+        if (button_has_latch) button_toggle[i] = false;  // latch overrides reverse toggle
     }
     circle_pad = Input::CreateDevice<Input::AnalogDevice>(
         Settings::values.current_input_profile.analogs[Settings::NativeAnalog::CirclePad]);
@@ -223,12 +236,21 @@ void Module::UpdatePadCallback(std::uintptr_t user_data, s64 cycles_late) {
         // Multi-key mapping: OR all bindings per button
         auto getButtonState = [this](int idx) -> bool {
             bool raw = false;
-            for (const auto& dev : buttons[idx]) {
-                if (dev->GetStatus()) {
-                    raw = true;
-                    break;
+            bool any_nonlatch_pressed = false;
+            bool any_nonlatch_released = false;
+            for (size_t di = 0; di < buttons[idx].size(); di++) {
+                bool pressed = buttons[idx][di]->GetStatus();
+                if (pressed) raw = true;
+                // Non-latch devices: press or release clears shared latch
+                if (di < s_is_latch[idx].size() && !s_is_latch[idx][di]) {
+                    bool prev = (di < s_dev_prev[idx].size()) ? s_dev_prev[idx][di] : false;
+                    if (pressed) any_nonlatch_pressed = true;
+                    if (prev && !pressed) any_nonlatch_released = true;
+                    if (di < s_dev_prev[idx].size()) s_dev_prev[idx][di] = pressed;
                 }
             }
+            if (any_nonlatch_pressed || any_nonlatch_released)
+                InputCommon::ToggleButton::ClearLatch(idx);
             return button_toggle[idx] ? !raw : raw;
         };
         state.a.Assign(getButtonState(A - BUTTON_HID_BEGIN));

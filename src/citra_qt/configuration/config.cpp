@@ -109,6 +109,8 @@ static void WriteProfileFile(const std::string& path, const Settings::InputProfi
         f.endArray();
     }
     f.endArray();
+    f.setValue(QStringLiteral("fixed_motion_config"),
+               QString::fromStdString(profile.fixed_motion_config));
     f.sync();
 }
 
@@ -123,7 +125,7 @@ static Settings::InputProfile ReadProfileFromQSettings(QSettings& settings) {
         for (int j = 0; j < numBinds && j < Settings::MAX_BINDINGS_PER_BUTTON; ++j) {
             settings.setArrayIndex(j);
             QString bindVal = settings.value(QStringLiteral("bind"), QString()).toString();
-            if (!bindVal.isEmpty()) {
+            if (!bindVal.isEmpty() && bindVal.toStdString() != "[empty]") {
                 profile.buttons[i].push_back(bindVal.toStdString());
             }
         }
@@ -260,6 +262,8 @@ static Settings::InputProfile ReadProfileFromQSettings(QSettings& settings) {
         profile.touch_points.push_back(std::move(point_keys));
     }
     settings.endArray();
+    profile.fixed_motion_config =
+        settings.value(QStringLiteral("fixed_motion_config"), QString()).toString().toStdString();
     return profile;
 }
 

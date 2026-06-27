@@ -7,6 +7,8 @@ add_library(input_common STATIC EXCLUDE_FROM_ALL
     main.h
     motion_emu.cpp
     motion_emu.h
+    fixed_motion.cpp
+    fixed_motion.h
     mouse/mouse.cpp
     mouse/mouse.h
     precompiled_headers.h

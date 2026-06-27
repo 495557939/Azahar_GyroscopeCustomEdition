@@ -5,6 +5,7 @@
 #include <array>
 #include <QCloseEvent>
 #include <QBoxLayout>
+#include <QHBoxLayout>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QLabel>
@@ -124,161 +125,229 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
             row_layout->addWidget(motion_tilt_max_angle);
             auto* row_widget = new QWidget(this);
             row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
             group_layout->addWidget(row_widget);
         }
     }
 
-    // Compact spacing for the motion group box
-    {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            gl->setSpacing(2);
-        }
-    }
-
-    // Row: Limit Y-axis rotation to 180° (long text, standalone)
+    // Clamp pitch rotation to 180° checkbox
     motion_clamp_pitch = new QCheckBox(tr("Limit Y-axis rotation to 180°"), this);
     motion_clamp_pitch->setToolTip(tr("Prevents the 3DS view from flipping upside down by limiting pitch rotation to ±90°"));
     motion_clamp_pitch->setChecked(true);
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            auto* row = new QHBoxLayout();
-            row->addWidget(motion_clamp_pitch);
-            static_cast<QBoxLayout*>(gl)->addLayout(row);
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_clamp_pitch);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
         }
     }
 
-    // Row: Auto Y-axis tilt  +  Auto Y-axis tilt (Inverted)
+    // Auto Y-axis tilt checkbox (default on)
     motion_auto_tilt_y = new QCheckBox(tr("Auto Y-axis tilt"), this);
     motion_auto_tilt_y->setToolTip(tr("Automatically tracks vertical device tilt from gyro/mouse input, preventing view from snapping back to flat"));
     motion_auto_tilt_y->setChecked(true);
-    motion_auto_tilt_y_invert = new QCheckBox(tr("Invert Y-tilt"), this);
-    motion_auto_tilt_y_invert->setToolTip(tr("Inverts the auto Y-axis tilt direction"));
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_y);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+    // Auto Y-axis tilt (inverted) checkbox
+    motion_auto_tilt_y_invert = new QCheckBox(tr("Auto Y-axis tilt (Inverted)"), this);
+    motion_auto_tilt_y_invert->setToolTip(tr("Inverts the auto Y-axis tilt direction. Overrides normal auto tilt when checked"));
     motion_auto_tilt_y_invert->setChecked(false);
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            auto* row = new QHBoxLayout();
-            row->addWidget(motion_auto_tilt_y);
-            row->addWidget(motion_auto_tilt_y_invert);
-            static_cast<QBoxLayout*>(gl)->addLayout(row);
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_y_invert);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
         }
     }
 
-    // Row: Auto Y-tilt return speed
+
+    // Auto Y-axis tilt return-to-neutral speed
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            auto* row = new QHBoxLayout();
-            row->addWidget(new QLabel(tr("Y-tilt return spd:"), this));
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Y-tilt return spd:"), this));
             motion_auto_tilt_y_return_speed = new QDoubleSpinBox(this);
-            motion_auto_tilt_y_return_speed->setRange(0.0, 100.0);
+            motion_auto_tilt_y_return_speed->setRange(0.0, 90.0);
             motion_auto_tilt_y_return_speed->setSingleStep(1.0);
             motion_auto_tilt_y_return_speed->setDecimals(1);
-            motion_auto_tilt_y_return_speed->setSuffix(QStringLiteral(" °/s"));
             motion_auto_tilt_y_return_speed->setValue(0.0);
-            motion_auto_tilt_y_return_speed->setToolTip(
-                tr("When no gyro input is active, gradually returns Y-axis tilt to Default Tilt at this speed.\n"
-                   "0 = disabled. Higher values snap back faster."));
-            row->addWidget(motion_auto_tilt_y_return_speed);
-            static_cast<QBoxLayout*>(gl)->addLayout(row);
+            row_layout->addWidget(motion_auto_tilt_y_return_speed);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
         }
     }
 
-    // Row: Auto Y-tilt max angle  +  Prevent flip
+    // Auto Y-axis tilt max angle + prevent flip
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            auto* row = new QHBoxLayout();
-            row->addWidget(new QLabel(tr("Y-tilt max angle:"), this));
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Y-tilt max angle:"), this));
             motion_auto_tilt_y_max_angle = new QSpinBox(this);
             motion_auto_tilt_y_max_angle->setRange(1, 180);
             motion_auto_tilt_y_max_angle->setValue(180);
-            motion_auto_tilt_y_max_angle->setSuffix(QStringLiteral("°"));
-            motion_auto_tilt_y_max_angle->setToolTip(
-                tr("Limits how far Auto Y-tilt can deviate from Default Tilt.\n"
-                   "180° = unlimited. 25° = ±25° range around Default Tilt."));
-            row->addWidget(motion_auto_tilt_y_max_angle);
+            row_layout->addWidget(motion_auto_tilt_y_max_angle);
             motion_auto_tilt_y_prevent_flip = new QCheckBox(tr("Prevent flip"), this);
-            motion_auto_tilt_y_prevent_flip->setToolTip(
-                tr("Prevents Y-axis tilt from crossing vertical (0°/180°).\n"
-                   "Based on Default Tilt, e.g. at 90°: limits range to [0°,180°];\n"
-                   "at 45°: allows [0°,180°] relative to 45° tilt."));
             motion_auto_tilt_y_prevent_flip->setChecked(true);
-            row->addWidget(motion_auto_tilt_y_prevent_flip);
-            static_cast<QBoxLayout*>(gl)->addLayout(row);
+            row_layout->addWidget(motion_auto_tilt_y_prevent_flip);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
         }
     }
-
-    // Row: [BETA] Auto X-axis tilt  +  speed
-    motion_auto_tilt_x = new QCheckBox(tr("[BETA] Auto X-tilt"), this);
+    // [BETA] Auto X-axis tilt checkbox (default off)
+    motion_auto_tilt_x = new QCheckBox(tr("[BETA] Auto X-axis tilt"), this);
     motion_auto_tilt_x->setToolTip(tr("BETA: Smoothly tilts the device left/right based on horizontal mouse movement. Returns to neutral when mouse stops"));
     motion_auto_tilt_x->setChecked(false);
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (gl) {
-            auto* row = new QHBoxLayout();
-            row->addWidget(motion_auto_tilt_x);
-            row->addWidget(new QLabel(tr("Speed:"), this));
-            motion_auto_tilt_speed = new QDoubleSpinBox(this);
-            motion_auto_tilt_speed->setRange(-10.0, 10.0);
-            motion_auto_tilt_speed->setSingleStep(0.1);
-            motion_auto_tilt_speed->setDecimals(1);
-            motion_auto_tilt_speed->setValue(1.0);
-            motion_auto_tilt_speed->setToolTip(tr("Scales [BETA] Auto X-tilt roll tracking speed. Positive = normal, negative = invert roll direction. Higher absolute value = faster response"));
-            row->addWidget(motion_auto_tilt_speed);
-            static_cast<QBoxLayout*>(gl)->addLayout(row);
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(motion_auto_tilt_x);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
         }
     }
 
+    // Auto tilt tracking speed
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Auto X-tilt speed:"), this));
+            motion_auto_tilt_speed = new QDoubleSpinBox(this);
+            motion_auto_tilt_speed->setRange(-50.0, 50.0);
+            motion_auto_tilt_speed->setSingleStep(0.1);
+            motion_auto_tilt_speed->setDecimals(1);
+            motion_auto_tilt_speed->setValue(1.0);
+            motion_auto_tilt_speed->setToolTip(tr("Scales [BETA] Auto X-tilt roll tracking speed. Higher = faster roll response to horizontal mouse movement"));
+            row_layout->addWidget(motion_auto_tilt_speed);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
+        }
+    }
+
+
+    // Auto X-axis tilt max angle
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            auto* row_layout = new QHBoxLayout();
+            row_layout->addWidget(new QLabel(tr("Auto X-tilt max angle:"), this));
+            motion_auto_tilt_x_max_angle = new QDoubleSpinBox(this);
+            motion_auto_tilt_x_max_angle->setRange(1.0, 180.0);
+            motion_auto_tilt_x_max_angle->setDecimals(0);
+            motion_auto_tilt_x_max_angle->setValue(45.0);
+            row_layout->addWidget(motion_auto_tilt_x_max_angle);
+            auto* row_widget = new QWidget(this);
+            row_widget->setLayout(row_layout);
+            row_layout->setContentsMargins(0, 0, 0, 0);
+            group_layout->addWidget(row_widget);
+        }
+    }
     // ── Controller-to-Mouse Linking (only for Mouse motion provider) ──────
     {
-        auto* gl = ui->motion_group_box->layout();
-        if (!gl)
+        auto* group_layout = ui->motion_group_box->layout();
+        if (!group_layout)
             return;
 
         link_group = new QWidget(this);
         auto* vbox = new QVBoxLayout(link_group);
         vbox->setContentsMargins(0, 4, 0, 0);
-        vbox->setSpacing(1);
+        vbox->setSpacing(2);
 
         auto* header = new QLabel(tr("Controller Link (emulate mouse with gamepad):"), link_group);
         header->setStyleSheet(QStringLiteral("font-weight: bold;"));
         vbox->addWidget(header);
 
-        // Helper: create a link row with checkbox + invert U/D + invert L/R
-        auto addLinkRow = [&](QCheckBox*& cb, const QString& label, const QString& tooltip,
-                              QCheckBox*& invUD, QCheckBox*& invLR, bool defaultChecked = false) {
-            auto* row = new QHBoxLayout();
-            cb = new QCheckBox(label, link_group);
-            cb->setToolTip(tooltip);
-            cb->setChecked(defaultChecked);
-            row->addWidget(cb);
-            row->addStretch();
-            invUD = new QCheckBox(QStringLiteral("Invert↕"), link_group);
-            invUD->setToolTip(tr("Invert Up/Down"));
-            row->addWidget(invUD);
-            invLR = new QCheckBox(QStringLiteral("Invert↔"), link_group);
-            invLR->setToolTip(tr("Invert Left/Right"));
-            row->addWidget(invLR);
-            vbox->addLayout(row);
-        };
+        {
+            auto* w = new QWidget(link_group);
+            auto* h = new QHBoxLayout(w);
+            h->setContentsMargins(0, 0, 0, 0);
+            link_cstick = new QCheckBox(tr("Link 3DS Right Stick (C-Stick)"), w);
+            link_cstick->setToolTip(tr("Right analog stick movement generates virtual mouse delta"));
+            link_cstick->setChecked(true);
+            h->addWidget(link_cstick);
+            h->addStretch();
+            link_cstick_invert_ud = new QCheckBox(QStringLiteral("Inv") + QChar(0x2195), w);
+            h->addWidget(link_cstick_invert_ud);
+            link_cstick_invert_lr = new QCheckBox(QStringLiteral("Inv") + QChar(0x2194), w);
+            h->addWidget(link_cstick_invert_lr);
+            vbox->addWidget(w);
+        }
 
-        addLinkRow(link_cstick, tr("Link 3DS Right Stick (C-Stick)"),
-                   tr("Right analog stick movement generates virtual mouse delta"),
-                   link_cstick_invert_ud, link_cstick_invert_lr, true);
-        addLinkRow(link_circle_pad, tr("Link 3DS Left Stick (Circle Pad)"),
-                   tr("Left analog stick movement generates virtual mouse delta"),
-                   link_circle_pad_invert_ud, link_circle_pad_invert_lr);
-        addLinkRow(link_dpad, tr("Link 3DS D-Pad"),
-                   tr("D-Pad presses generate virtual mouse delta"),
-                   link_dpad_invert_ud, link_dpad_invert_lr);
-        addLinkRow(link_abxy, tr("Link ABXY 3DS Layout"),
-                   tr("ABXY buttons generate virtual mouse delta:\n"
-                      "Top button (Y/N) = Up, Bottom (A/S) = Down,\n"
-                      "Left (X/W) = Left, Right (B/E) = Right"),
-                   link_abxy_invert_ud, link_abxy_invert_lr);
+        {
+            auto* w = new QWidget(link_group);
+            auto* h = new QHBoxLayout(w);
+            h->setContentsMargins(0, 0, 0, 0);
+            link_circle_pad = new QCheckBox(tr("Link 3DS Left Stick (Circle Pad)"), w);
+            link_circle_pad->setToolTip(tr("Left analog stick movement generates virtual mouse delta"));
+            h->addWidget(link_circle_pad);
+            h->addStretch();
+            link_circle_pad_invert_ud = new QCheckBox(QStringLiteral("Inv") + QChar(0x2195), w);
+            h->addWidget(link_circle_pad_invert_ud);
+            link_circle_pad_invert_lr = new QCheckBox(QStringLiteral("Inv") + QChar(0x2194), w);
+            h->addWidget(link_circle_pad_invert_lr);
+            vbox->addWidget(w);
+        }
+
+        {
+            auto* w = new QWidget(link_group);
+            auto* h = new QHBoxLayout(w);
+            h->setContentsMargins(0, 0, 0, 0);
+            link_dpad = new QCheckBox(tr("Link 3DS D-Pad"), w);
+            link_dpad->setToolTip(tr("D-Pad presses generate virtual mouse delta"));
+            h->addWidget(link_dpad);
+            h->addStretch();
+            link_dpad_invert_ud = new QCheckBox(QStringLiteral("Inv") + QChar(0x2195), w);
+            h->addWidget(link_dpad_invert_ud);
+            link_dpad_invert_lr = new QCheckBox(QStringLiteral("Inv") + QChar(0x2194), w);
+            h->addWidget(link_dpad_invert_lr);
+            vbox->addWidget(w);
+        }
+
+        {
+            auto* w = new QWidget(link_group);
+            auto* h = new QHBoxLayout(w);
+            h->setContentsMargins(0, 0, 0, 0);
+            link_abxy = new QCheckBox(tr("Link ABXY 3DS Layout"), w);
+            link_abxy->setToolTip(tr("ABXY buttons generate virtual mouse delta:\n"
+                                     "Top button (Y/N) = Up, Bottom (A/S) = Down,\n"
+                                     "Left (X/W) = Left, Right (B/E) = Right"));
+            h->addWidget(link_abxy);
+            h->addStretch();
+            link_abxy_invert_ud = new QCheckBox(QStringLiteral("Inv") + QChar(0x2195), w);
+            h->addWidget(link_abxy_invert_ud);
+            link_abxy_invert_lr = new QCheckBox(QStringLiteral("Inv") + QChar(0x2194), w);
+            h->addWidget(link_abxy_invert_lr);
+            vbox->addWidget(w);
+        }
 
         auto* speed_row = new QHBoxLayout();
         speed_row->addWidget(new QLabel(tr("Link Speed:"), link_group));
@@ -286,13 +355,13 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
         link_speed->setRange(0.1, 10.0);
         link_speed->setSingleStep(0.1);
         link_speed->setDecimals(1);
-        link_speed->setValue(1.0);
+        link_speed->setValue(0.4);
         link_speed->setToolTip(tr("Multiplier for controller-link virtual mouse delta.\n"
                                   "Higher = faster aiming with controller"));
         speed_row->addWidget(link_speed);
         vbox->addLayout(speed_row);
 
-        gl->addWidget(link_group);
+        group_layout->addWidget(link_group);
 
         // Show/hide link controls based on motion provider selection
         connect(ui->motion_provider,
@@ -337,6 +406,16 @@ ConfigureMotionTouch::ConfigureMotionTouch(QWidget* parent)
         }
     });
 
+
+    // Compact layout: minimize spacing between rows
+    {
+        auto* group_layout = ui->motion_group_box->layout();
+        if (group_layout) {
+            group_layout->setSpacing(2);
+            group_layout->setContentsMargins(4, 0, 4, 0);
+        }
+    }
+
     SetConfiguration();
     UpdateUiDisplay();
     ConnectEvents();
@@ -378,18 +457,18 @@ void ConfigureMotionTouch::SetConfiguration() {
     motion_auto_tilt_y_invert->setChecked(motion_param.Get("auto_tilt_y_invert", false));
     motion_auto_tilt_x->setChecked(motion_param.Get("auto_tilt_x", false));
     motion_auto_tilt_speed->setValue(static_cast<double>(motion_param.Get("auto_tilt_speed", 1.0f)));
-    motion_auto_tilt_y_return_speed->setValue(
-        static_cast<double>(motion_param.Get("auto_tilt_y_return_speed", 0.0f)));
+    motion_auto_tilt_x_max_angle->setValue(static_cast<double>(motion_param.Get("auto_tilt_x_max_angle", 45.0f)));
+    motion_auto_tilt_y_return_speed->setValue(static_cast<double>(motion_param.Get("auto_tilt_y_return_speed", 0.0f)));
     motion_auto_tilt_y_max_angle->setValue(motion_param.Get("auto_tilt_y_max_angle", 180));
-    motion_auto_tilt_y_prevent_flip->setChecked(
-        motion_param.Get("auto_tilt_y_prevent_flip", true));
+    motion_auto_tilt_y_prevent_flip->setChecked(motion_param.Get("auto_tilt_y_prevent_flip", true));
+
 
     // Controller-to-mouse linking
     link_cstick->setChecked(motion_param.Get("link_cstick", true));
     link_circle_pad->setChecked(motion_param.Get("link_circle_pad", false));
     link_dpad->setChecked(motion_param.Get("link_dpad", false));
     link_abxy->setChecked(motion_param.Get("link_abxy", false));
-    link_speed->setValue(static_cast<double>(motion_param.Get("link_speed", 1.0f)));
+    link_speed->setValue(static_cast<double>(motion_param.Get("link_speed", 0.4f)));
     // Per-link invert
     link_cstick_invert_ud->setChecked(motion_param.Get("link_cstick_inv_ud", false));
     link_cstick_invert_lr->setChecked(motion_param.Get("link_cstick_inv_lr", false));
@@ -399,6 +478,7 @@ void ConfigureMotionTouch::SetConfiguration() {
     link_dpad_invert_lr->setChecked(motion_param.Get("link_dpad_inv_lr", false));
     link_abxy_invert_ud->setChecked(motion_param.Get("link_abxy_inv_ud", false));
     link_abxy_invert_lr->setChecked(motion_param.Get("link_abxy_inv_lr", false));
+
 
     guid = motion_param.Get("guid", "0");
     port = motion_param.Get("port", 0);
@@ -418,6 +498,8 @@ void ConfigureMotionTouch::UpdateUiDisplay() {
     const std::string motion_engine = ui->motion_provider->currentData().toString().toStdString();
     const std::string touch_engine = ui->touch_provider->currentData().toString().toStdString();
     ui->touchpad_config_btn->setEnabled(ui->touchpad_checkbox->isChecked());
+    if (auto* ml = ui->motion_group_box->layout())
+        ml->setSpacing(2);
     // Mouse (motion_emu) specific controls
     bool is_motion_emu = (motion_engine == "motion_emu");
     ui->motion_mode_label->setVisible(is_motion_emu);
@@ -439,6 +521,7 @@ void ConfigureMotionTouch::UpdateUiDisplay() {
     motion_auto_tilt_y_invert->setVisible(is_motion_emu);
     motion_auto_tilt_x->setVisible(is_motion_emu);
     motion_auto_tilt_speed->setVisible(is_motion_emu);
+    motion_auto_tilt_x_max_angle->setVisible(is_motion_emu);
     motion_auto_tilt_y_return_speed->setVisible(is_motion_emu);
     motion_auto_tilt_y_max_angle->setVisible(is_motion_emu);
     motion_auto_tilt_y_prevent_flip->setVisible(is_motion_emu);
@@ -680,10 +763,11 @@ void ConfigureMotionTouch::ApplyConfiguration() {
         motion_param.Set("auto_tilt_y_invert", motion_auto_tilt_y_invert->isChecked());
         motion_param.Set("auto_tilt_x", motion_auto_tilt_x->isChecked());
         motion_param.Set("auto_tilt_speed", static_cast<float>(motion_auto_tilt_speed->value()));
-        motion_param.Set("auto_tilt_y_return_speed",
-                         static_cast<float>(motion_auto_tilt_y_return_speed->value()));
+        motion_param.Set("auto_tilt_x_max_angle", static_cast<float>(motion_auto_tilt_x_max_angle->value()));
+        motion_param.Set("auto_tilt_y_return_speed", static_cast<float>(motion_auto_tilt_y_return_speed->value()));
         motion_param.Set("auto_tilt_y_max_angle", motion_auto_tilt_y_max_angle->value());
         motion_param.Set("auto_tilt_y_prevent_flip", motion_auto_tilt_y_prevent_flip->isChecked());
+
 
         // Controller-to-mouse linking
         motion_param.Set("link_cstick", link_cstick->isChecked());
@@ -700,6 +784,7 @@ void ConfigureMotionTouch::ApplyConfiguration() {
         motion_param.Set("link_dpad_inv_lr", link_dpad_invert_lr->isChecked());
         motion_param.Set("link_abxy_inv_ud", link_abxy_invert_ud->isChecked());
         motion_param.Set("link_abxy_inv_lr", link_abxy_invert_lr->isChecked());
+
     } else if (motion_engine == "sdl") {
         motion_param.Set("guid", guid);
         motion_param.Set("port", port);

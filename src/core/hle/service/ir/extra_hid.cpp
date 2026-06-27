@@ -303,6 +303,8 @@ void ExtraHID::LoadInputDevices() {
                 Common::ParamPackage pkg(bind);
                 if (pkg.Get("toggle", "0") == "1")
                     zl_toggle = true;
+                else if (pkg.Get("latch", "0") == "1")
+                    dev = std::make_unique<InputCommon::ToggleButton>(std::move(dev), 0);
                 else if (pkg.Get("turbo", "0") == "1")
                     dev = std::make_unique<InputCommon::TurboButton>(std::move(dev));
                 zl.push_back(std::move(dev));

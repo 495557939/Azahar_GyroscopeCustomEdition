@@ -12,6 +12,8 @@
 #include <QKeySequence>
 #include <QWidget>
 #include <QGroupBox>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
 #include "common/param_package.h"
 #include "common/settings.h"
 #include "input_common/main.h"
@@ -116,7 +118,28 @@ private:
     std::vector<TouchPointWidgets> touch_point_widgets;
     static constexpr int MAX_TOUCH_POINTS = 15;
     static constexpr int MAX_KEYS_PER_POINT = 5;
+
+    // Fixed Motion Override presets
+    static constexpr int MAX_FIXED_MOTION_PRESETS = 8;
+    static constexpr int MAX_FIXED_MOTION_KEYS = 5;
+    struct FixedMotionWidgets {
+        QWidget* container;
+        QSlider* grav_x;     QDoubleSpinBox* grav_x_label;
+        QSlider* grav_y;     QDoubleSpinBox* grav_y_label;
+        QSlider* grav_z;     QDoubleSpinBox* grav_z_label;
+        QSlider* rate_x;     QDoubleSpinBox* rate_x_label;
+        QSlider* rate_y;     QDoubleSpinBox* rate_y_label;
+        QSlider* rate_z;     QDoubleSpinBox* rate_z_label;
+        std::vector<QPushButton*> slot_btns;
+        std::vector<QString> slot_params;
+        bool has_binding = false;
+    };
+    std::vector<FixedMotionWidgets> fixed_motion_widgets;
+    QCheckBox* fixed_motion_enabled = nullptr;
     void SetupTouchPointsMultiKeySlots();
+    void UpdateFixedMotionSlots();
+    void UpdateFixedMotionButtonColors();
+    bool eventFilter(QObject* obj, QEvent* event) override;
     void UpdateTouchPointsMultiKeySlots();
 
     /// Analog inputs are also represented each with a single button, used to configure with an

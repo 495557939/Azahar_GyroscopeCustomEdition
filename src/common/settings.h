@@ -462,6 +462,8 @@ struct InputProfile {
     u16 udp_input_port;
     u8 udp_pad_index;
     // Per-profile touch screen coordinate bindings.
+    std::string fixed_motion_config;  // serialized FixedMotionConfig
+
     // touch_points[point][slot] = serialized ParamPackage with engine/key + x% + y%.
     std::vector<std::vector<std::string>> touch_points;
 };

@@ -1,4 +1,4 @@
-// Copyright Citra Emulator Project / Azahar Emulator Project
+﻿// Copyright Citra Emulator Project / Azahar Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -22,6 +22,7 @@
 #include "citra_qt/configuration/configure_input.h"
 #include "citra_qt/configuration/configure_motion_touch.h"
 #include "common/param_package.h"
+#include "input_common/fixed_motion.h"
 #include "core/core.h"
 #include "core/hle/service/hid/hid.h"
 #include "ui_configure_input.h"
@@ -517,6 +518,8 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                             if (has_binding) {
                             bool is_turbo = (slot < (int)buttons_param[button_id].size() &&
                                 buttons_param[button_id][slot].Get("turbo", "0") == "1");
+                            bool is_latch = (slot < (int)buttons_param[button_id].size() &&
+                                buttons_param[button_id][slot].Get("latch", "0") == "1");
                             // Toggle is per-button: check ALL slots
                             bool is_toggle = false;
                             for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
@@ -529,8 +532,15 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                                     ApplyConfiguration();
                                     Settings::SaveProfile(ui->profile->currentIndex());
                                 });
-                            } else if (is_toggle) {
+                            } else if (is_latch) {
                                 context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                    buttons_param[button_id][slot].Erase("latch");
+                                    UpdateButtonColor(button_id, slot);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else if (is_toggle) {
+                                context_menu.addAction(tr("Cancel Reverse"), this, [=] {
                                     // Erase toggle from ALL slots
                                     for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
                                         buttons_param[button_id][s].Erase("toggle");
@@ -542,15 +552,29 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                             } else {
                                 context_menu.addAction(tr("Set Turbo"), this, [=] {
                                     buttons_param[button_id][slot].Erase("toggle");
+                                    buttons_param[button_id][slot].Erase("latch");
                                     buttons_param[button_id][slot].Set("turbo", "1");
                                     UpdateButtonColor(button_id, slot);
                                     ApplyConfiguration();
                                     Settings::SaveProfile(ui->profile->currentIndex());
                                 });
-                                context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                context_menu.addAction(tr("Set Toggle"), this, [=] {
+                                    buttons_param[button_id][slot].Erase("turbo");
+                                    buttons_param[button_id][slot].Erase("toggle");
+                                    buttons_param[button_id][slot].Set("latch", "1");
+                                    // Clear toggle (reverse) from other slots to avoid inversion
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                        if (s != slot) buttons_param[button_id][s].Erase("toggle");
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                                context_menu.addAction(tr("Set Reverse"), this, [=] {
                                     // Set toggle on ALL slots (per-button toggle)
                                     for (int s = 0; s < (int)buttons_param[button_id].size(); s++) {
                                         buttons_param[button_id][s].Erase("turbo");
+                                        buttons_param[button_id][s].Erase("latch");
                                         buttons_param[button_id][s].Set("toggle", "1");
                                     }
                                     // Update ALL slot colors
@@ -678,7 +702,7 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                                             Settings::SaveProfile(ui->profile->currentIndex());
                                         });
                                     } else if (is_toggle) {
-                                        context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                        context_menu.addAction(tr("Cancel Reverse"), this, [=] {
                                             analogs_param[analog_id].Erase(toggle_key);
                                             UpdateAnalogButtonColor(analog_id, sub_button_id);
                                             ApplyConfiguration();
@@ -692,7 +716,7 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                                             ApplyConfiguration();
                                             Settings::SaveProfile(ui->profile->currentIndex());
                                         });
-                                        context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                        context_menu.addAction(tr("Set Reverse"), this, [=] {
                                             analogs_param[analog_id].Erase(turbo_key);
                                             analogs_param[analog_id].Set(toggle_key, "1");
                                             UpdateAnalogButtonColor(analog_id, sub_button_id);
@@ -915,14 +939,88 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
                 connect(keyBtn, &QPushButton::customContextMenuRequested, this,
                         [this, point, cap, keyBtn](const QPoint& pos) {
                             QMenu context_menu;
-                            if (point < (int)touch_points_param.size() &&
+                            bool has_binding = (point < (int)touch_points_param.size() &&
                                 cap < (int)touch_points_param[point].size() &&
-                                !touch_points_param[point][cap].Serialize().empty()) {
+                                !touch_points_param[point][cap].Serialize().empty());
+                            bool is_turbo = false;
+                            if (has_binding) {
+                                is_turbo = (touch_points_param[point][cap].Get("turbo", "0") == "1");
+                            }
+                            bool any_toggle = false;
+                            bool is_latch = false;
+                            if (point < (int)touch_points_param.size()) {
+                                for (const auto& p : touch_points_param[point]) {
+                                    if (!p.Serialize().empty() && p.Get("toggle", "0") == "1") {
+                                        any_toggle = true; break;
+                                    }
+                                }
+                            }
+                            if (has_binding) {
+                                is_latch = (touch_points_param[point][cap].Get("latch", "0") == "1");
+                            }
+                            if (has_binding && !is_turbo && !any_toggle && !is_latch) {
                                 context_menu.addAction(tr("Clear"), this, [this, point, cap] {
                                     if (point < (int)touch_points_param.size() &&
                                         cap < (int)touch_points_param[point].size()) {
                                         touch_points_param[point].erase(
                                             touch_points_param[point].begin() + cap);
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                            }
+                            if (is_turbo) {
+                                context_menu.addAction(tr("Cancel Turbo"), this, [this, point, cap] {
+                                    if (point < (int)touch_points_param.size() &&
+                                        cap < (int)touch_points_param[point].size()) {
+                                        touch_points_param[point][cap].Erase("turbo");
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                            }
+                            if (any_toggle) {
+                                context_menu.addAction(tr("Cancel Reverse"), this, [this, point] {
+                                    if (point < (int)touch_points_param.size()) {
+                                        for (auto& p : touch_points_param[point])
+                                            p.Erase("toggle");
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                            }
+                            if (is_latch) {
+                                context_menu.addAction(tr("Cancel Toggle"), this, [this, point, cap] {
+                                    if (point < (int)touch_points_param.size() &&
+                                        cap < (int)touch_points_param[point].size()) {
+                                        touch_points_param[point][cap].Erase("latch");
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                            }
+                            if (has_binding && !any_toggle && !is_latch) {
+                                context_menu.addAction(tr("Set Turbo"), this, [this, point, cap] {
+                                    if (point < (int)touch_points_param.size() &&
+                                        cap < (int)touch_points_param[point].size()) {
+                                        touch_points_param[point][cap].Erase("toggle");
+                                        touch_points_param[point][cap].Erase("latch");
+                                        touch_points_param[point][cap].Set("turbo", "1");
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                                context_menu.addAction(tr("Set Toggle"), this, [this, point, cap] {
+                                    if (point < (int)touch_points_param.size() &&
+                                        cap < (int)touch_points_param[point].size()) {
+                                        touch_points_param[point][cap].Erase("turbo");
+                                        touch_points_param[point][cap].Erase("toggle");
+                                        touch_points_param[point][cap].Set("latch", "1");
+                                    }
+                                    UpdateTouchPointsMultiKeySlots();
+                                });
+                                context_menu.addAction(tr("Set Reverse"), this, [this, point] {
+                                    if (point < (int)touch_points_param.size()) {
+                                        for (auto& p : touch_points_param[point]) {
+                                            p.Erase("turbo");
+                                            p.Erase("latch");
+                                            p.Set("toggle", "1");
+                                        }
                                     }
                                     UpdateTouchPointsMultiKeySlots();
                                 });
@@ -958,14 +1056,232 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
     // (not lazily created like button slots). Visibility must be deferred until
     // the widget tree is fully shown, otherwise setVisible(true) on hidden children
     // has no effect.
-    // UpdateTouchPointsMultiKeySlots() is called via QTimer::singleShot at the end
-    // of LoadConfiguration().
+    // UpdateTouchPointsMultiKeySlots() is called via showEvent() instead.
 
     // Add to gridLayout_7, row 3 (below Misc/Shoulders), spanning both columns
         ui->gridLayout_7->addWidget(touchGroup, 3, 0, 1, 2);
         ui->gridLayout_7->setRowStretch(3, 0);
         ui->gridLayout_7->setRowMinimumHeight(3, 0);
     }
+    // Fixed Motion Override section
+    {
+        auto* fmGroup = new QGroupBox(tr("Fixed Motion Override"), this);
+        auto* fmLayout = new QVBoxLayout(fmGroup);
+
+        fixed_motion_enabled = new QCheckBox(tr("Enable Fixed Motion Override"), fmGroup);
+        fixed_motion_enabled->setChecked(true);
+        fixed_motion_enabled->setVisible(false);
+        fmLayout->addWidget(fixed_motion_enabled);
+
+        fixed_motion_widgets.resize(MAX_FIXED_MOTION_PRESETS);
+        for (int p = 0; p < MAX_FIXED_MOTION_PRESETS; p++) {
+            auto& w = fixed_motion_widgets[p];
+            w.container = new QWidget(fmGroup);
+            w.container->setVisible(p == 0);
+            auto* pLayout = new QVBoxLayout(w.container);
+            pLayout->setContentsMargins(4, 2, 4, 2);
+
+            auto* titleLabel = new QLabel(tr("Preset %1").arg(p + 1), w.container);
+            QFont boldFont = titleLabel->font();
+            boldFont.setBold(true);
+            titleLabel->setFont(boldFont);
+            pLayout->addWidget(titleLabel);
+
+            auto makeSlider = [&](const QString& label, float minV, float maxV, float init, int steps) {
+                auto* row = new QHBoxLayout();
+                auto* nameLabel = new QLabel(label, w.container);
+                nameLabel->setMinimumWidth(70);
+                nameLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
+                row->addWidget(nameLabel);
+                auto* slider = new QSlider(Qt::Horizontal, w.container);
+                slider->setRange(0, steps);
+                slider->setValue(static_cast<int>((init - minV) / (maxV - minV) * steps));
+                auto* valBox = new QDoubleSpinBox(w.container);
+                valBox->setMinimumWidth(80);
+                valBox->setDecimals(2);
+                valBox->setMinimum(-99999.0);
+                valBox->setMaximum(99999.0);
+                valBox->setValue(static_cast<double>(init));
+                valBox->setKeyboardTracking(false);
+                row->addWidget(slider);
+                row->addWidget(valBox);
+                pLayout->addLayout(row);
+                QObject::connect(slider, &QSlider::valueChanged, w.container,
+                    [valBox, minV, maxV, steps](int v) {
+                        if (!valBox->hasFocus()) {
+                            double real = minV + (maxV - minV) * v / steps;
+                            valBox->setValue(real);
+                        }
+                    });
+                QObject::connect(valBox, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                    w.container, [slider, minV, maxV, steps](double v) {
+                        int pos = static_cast<int>((v - minV) / (maxV - minV) * steps);
+                        slider->setValue(std::clamp(pos, 0, steps));
+                    });
+                slider->setFocusPolicy(Qt::StrongFocus);
+                slider->installEventFilter(this);
+                return std::make_pair(slider, valBox);
+            };
+
+            auto gx = makeSlider(tr("Tilt Dir X:"), -1.0f, 1.0f, 0.0f, 200);
+            w.grav_x = gx.first; w.grav_x_label = gx.second;
+            auto gy = makeSlider(tr("Tilt Dir Y:"), -1.0f, 1.0f, -1.0f, 200);
+            w.grav_y = gy.first; w.grav_y_label = gy.second;
+            auto gz = makeSlider(tr("Tilt Dir Z:"), -1.0f, 1.0f, 0.0f, 200);
+            w.grav_z = gz.first; w.grav_z_label = gz.second;
+
+            auto rx = makeSlider(tr("Rate X:"), -5000.0f, 5000.0f, 0.0f, 500);
+            w.rate_x = rx.first; w.rate_x_label = rx.second;
+            auto ry = makeSlider(tr("Rate Y:"), -5000.0f, 5000.0f, 0.0f, 500);
+            w.rate_y = ry.first; w.rate_y_label = ry.second;
+            auto rz = makeSlider(tr("Rate Z:"), -5000.0f, 5000.0f, 0.0f, 500);
+            w.rate_z = rz.first; w.rate_z_label = rz.second;
+
+            // Button bindings
+            auto* btnRow = new QHBoxLayout();
+            btnRow->addWidget(new QLabel(tr("Keys:"), w.container));
+            w.slot_params.resize(MAX_FIXED_MOTION_KEYS);
+            for (int s = 0; s < MAX_FIXED_MOTION_KEYS; s++) {
+                auto* btn = new QPushButton(tr("[not set]"), w.container);
+                btn->setContextMenuPolicy(Qt::CustomContextMenu);
+                btn->setMinimumWidth(90);
+                btn->setVisible(s == 0);
+                w.slot_btns.push_back(btn);
+                btnRow->addWidget(btn);
+
+                int cap = s;
+                connect(btn, &QPushButton::clicked, this, [this, p, cap, btn]() {
+                    HandleClick(btn,
+                        [this, p, cap](Common::ParamPackage params) {
+                            while ((int)fixed_motion_widgets[p].slot_params.size() <= cap)
+                                fixed_motion_widgets[p].slot_params.resize(cap + 1);
+                            fixed_motion_widgets[p].slot_params[cap] =
+                                QString::fromStdString(params.Serialize());
+                            UpdateFixedMotionSlots();
+                        },
+                        InputCommon::Polling::DeviceType::Button);
+                    // Add analog pollers for triggers/sticks (after Button pollers are set up)
+                    {
+                        auto analog = InputCommon::Polling::GetPollers(InputCommon::Polling::DeviceType::Analog);
+                        for (auto& p : analog) {
+                            p->Start();
+                            device_pollers.push_back(std::move(p));
+                        }
+                    }
+                });
+
+                connect(btn, &QPushButton::customContextMenuRequested, this,
+                    [this, p, cap, btn](const QPoint& pos) {
+                        QMenu context_menu;
+                        bool has_binding = (cap < (int)fixed_motion_widgets[p].slot_params.size() &&
+                            !fixed_motion_widgets[p].slot_params[cap].isEmpty());
+                        bool this_toggle = false;
+                        bool this_reverse = false;
+                        bool is_turbo = false;
+                        if (has_binding) {
+                            Common::ParamPackage pp2(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                            is_turbo = (pp2.Get("turbo", "0") == "1");
+                            this_toggle = (pp2.Get("toggle", "0") == "1");
+                        }
+                        // Check if any slot in this preset has reverse
+                        for (size_t sn = 0; sn < fixed_motion_widgets[p].slot_params.size(); sn++) {
+                            if (!fixed_motion_widgets[p].slot_params[sn].isEmpty()) {
+                                Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[sn].toStdString());
+                                if (pp.Get("reverse", "0") == "1") { this_reverse = true; break; }
+                            }
+                        }
+                        // Clear: always show when bound (even if turbo/toggle/reverse)
+                        if (has_binding && !this_toggle && !this_reverse) {
+                            context_menu.addAction(tr("Clear"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size()) {
+                                    fixed_motion_widgets[p].slot_params.erase(
+                                        fixed_motion_widgets[p].slot_params.begin() + cap);
+                                    fixed_motion_widgets[p].slot_params.resize(MAX_FIXED_MOTION_KEYS);
+                                }
+                                UpdateFixedMotionSlots();
+                                UpdateFixedMotionButtonColors();
+                            });
+                        }
+                        if (is_turbo) {
+                            context_menu.addAction(tr("Cancel Turbo"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size()) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                                    pp.Erase("turbo");
+                                    fixed_motion_widgets[p].slot_params[cap] = QString::fromStdString(pp.Serialize());
+                                    UpdateFixedMotionButtonColors();
+                                }
+                            });
+                        }
+                        if (this_toggle) {
+                            context_menu.addAction(tr("Cancel Toggle"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size()) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                                    pp.Erase("toggle");
+                                    fixed_motion_widgets[p].slot_params[cap] = QString::fromStdString(pp.Serialize());
+                                    UpdateFixedMotionButtonColors();
+                                }
+                            });
+                        }
+                        if (this_reverse) {
+                            context_menu.addAction(tr("Cancel Reverse"), this, [this, p] {
+                                for (size_t sn = 0; sn < fixed_motion_widgets[p].slot_params.size(); sn++) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[sn].toStdString());
+                                    pp.Erase("reverse");
+                                    fixed_motion_widgets[p].slot_params[sn] = QString::fromStdString(pp.Serialize());
+                                }
+                                UpdateFixedMotionButtonColors();
+                            });
+                        }
+                        if (has_binding && !this_toggle && !this_reverse) {
+                            context_menu.addAction(tr("Set Turbo"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size() &&
+                                    !fixed_motion_widgets[p].slot_params[cap].isEmpty()) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                                    pp.Erase("toggle");
+                                    pp.Set("turbo", "1");
+                                    fixed_motion_widgets[p].slot_params[cap] = QString::fromStdString(pp.Serialize());
+                                    UpdateFixedMotionButtonColors();
+                                }
+                            });
+                            context_menu.addAction(tr("Set Toggle"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size() &&
+                                    !fixed_motion_widgets[p].slot_params[cap].isEmpty()) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                                    pp.Erase("turbo");
+                                    pp.Set("toggle", "1");
+                                    fixed_motion_widgets[p].slot_params[cap] = QString::fromStdString(pp.Serialize());
+                                    UpdateFixedMotionButtonColors();
+                                }
+                            });
+                            context_menu.addAction(tr("Set Reverse"), this, [this, p, cap] {
+                                if (cap < (int)fixed_motion_widgets[p].slot_params.size() &&
+                                    !fixed_motion_widgets[p].slot_params[cap].isEmpty()) {
+                                    Common::ParamPackage pp(fixed_motion_widgets[p].slot_params[cap].toStdString());
+                                    pp.Erase("turbo");
+                                    pp.Erase("toggle");
+                                    pp.Set("reverse", "1");
+                                    fixed_motion_widgets[p].slot_params[cap] = QString::fromStdString(pp.Serialize());
+                                    UpdateFixedMotionButtonColors();
+                                }
+                            });
+                        }
+                        context_menu.addAction(tr("Clear All"), this, [this, p] {
+                            fixed_motion_widgets[p].slot_params.clear();
+                            UpdateFixedMotionSlots();
+                            UpdateFixedMotionButtonColors();
+                        });
+                        context_menu.exec(btn->mapToGlobal(pos));
+                    });
+            }
+            pLayout->addLayout(btnRow);
+            fmLayout->addWidget(w.container);
+        }
+
+        ui->gridLayout_7->addWidget(fmGroup, 4, 0, 1, 2);
+        ui->gridLayout_7->setRowStretch(4, 0);
+    UpdateFixedMotionSlots();
+    }
+
 
     connect(ui->buttonMotionTouch, &QPushButton::clicked, this, [this] {
         ui->buttonMotionTouch->setEnabled(false);
@@ -1012,9 +1328,10 @@ ConfigureInput::~ConfigureInput() = default;
 
 void ConfigureInput::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
-    // Touch point extra buttons need the widget tree to be visible before
-    // setVisible(true) takes effect on pre-created hidden children.
+    // Touch point extra buttons and FM preset slots need the widget tree to be
+    // visible before setVisible(true/false) takes effect on pre-created hidden children.
     UpdateTouchPointsMultiKeySlots();
+    UpdateFixedMotionSlots();
 }
 
 void ConfigureInput::ApplyConfiguration() {
@@ -1026,7 +1343,7 @@ void ConfigureInput::ApplyConfiguration() {
         Settings::values.current_input_profile.buttons[i].clear();
         for (const auto& param : buttons_param[i]) {
             std::string serialized = param.Serialize();
-            if (!serialized.empty())
+            if (!serialized.empty() && serialized != "[empty]")
                 Settings::values.current_input_profile.buttons[i].push_back(std::move(serialized));
         }
     }
@@ -1036,6 +1353,29 @@ void ConfigureInput::ApplyConfiguration() {
                    [](const Common::ParamPackage& param) { return param.Serialize(); });
 
     // Touch screen coordinate bindings (nested: points -> keys)
+
+    // Fixed Motion Override save
+    {
+        InputCommon::FixedMotionConfig fm_cfg;
+        fm_cfg.enabled = fixed_motion_enabled ? fixed_motion_enabled->isChecked() : false;
+        for (size_t i = 0; i < fixed_motion_widgets.size(); i++) {
+            InputCommon::FixedMotionPreset fp;
+            fp.gravity = Common::MakeVec(
+                static_cast<float>(fixed_motion_widgets[i].grav_x_label->value()),
+                static_cast<float>(fixed_motion_widgets[i].grav_y_label->value()),
+                static_cast<float>(fixed_motion_widgets[i].grav_z_label->value()));
+            fp.angular_rate = Common::MakeVec(
+                static_cast<float>(fixed_motion_widgets[i].rate_x_label->value()),
+                static_cast<float>(fixed_motion_widgets[i].rate_y_label->value()),
+                static_cast<float>(fixed_motion_widgets[i].rate_z_label->value()));
+            for (const auto& s : fixed_motion_widgets[i].slot_params) {
+                if (!s.isEmpty()) fp.buttons.push_back(s.toStdString());
+            }
+            fm_cfg.presets.push_back(std::move(fp));
+        }
+        Settings::values.current_input_profile.fixed_motion_config = fm_cfg.Serialize();
+    }
+
     Settings::values.current_input_profile.touch_points.clear();
     for (const auto& point_keys : touch_points_param) {
         std::vector<std::string> serialized_point;
@@ -1098,7 +1438,6 @@ QList<QKeySequence> ConfigureInput::GetUsedKeyboardKeys() {
 }
 
 void ConfigureInput::LoadConfiguration() {
-
     ui->use_artic_controller->setChecked(Settings::values.use_artic_base_controller.GetValue());
     ui->use_artic_controller->setEnabled(!system.IsPoweredOn());
 
@@ -1114,6 +1453,37 @@ void ConfigureInput::LoadConfiguration() {
     std::transform(Settings::values.current_input_profile.analogs.begin(),
                    Settings::values.current_input_profile.analogs.end(), analogs_param.begin(),
                    [](const std::string& str) { return Common::ParamPackage(str); });
+
+    // Load Fixed Motion Override
+    {
+        // Clear all previous binding data
+        for (auto& w : fixed_motion_widgets) {
+            w.slot_params.clear();
+            w.slot_params.resize(MAX_FIXED_MOTION_KEYS);
+            w.container->setVisible(false);
+        }
+        if (!Settings::values.current_input_profile.fixed_motion_config.empty()) {
+            InputCommon::FixedMotionConfig fm_cfg;
+            fm_cfg.LoadFromParams(Settings::values.current_input_profile.fixed_motion_config);
+            if (fixed_motion_enabled)
+                fixed_motion_enabled->setChecked(fm_cfg.enabled);
+            for (size_t i = 0; i < fm_cfg.presets.size() && i < fixed_motion_widgets.size(); i++) {
+                auto& w = fixed_motion_widgets[i];
+                w.container->setVisible(true);
+                w.grav_x_label->setValue(fm_cfg.presets[i].gravity.x);
+                w.grav_y_label->setValue(fm_cfg.presets[i].gravity.y);
+                w.grav_z_label->setValue(fm_cfg.presets[i].gravity.z);
+                w.rate_x_label->setValue(fm_cfg.presets[i].angular_rate.x);
+                w.rate_y_label->setValue(fm_cfg.presets[i].angular_rate.y);
+                w.rate_z_label->setValue(fm_cfg.presets[i].angular_rate.z);
+                for (size_t j = 0; j < fm_cfg.presets[i].buttons.size() && j < w.slot_params.size(); j++) {
+                    w.slot_params[j] = QString::fromStdString(fm_cfg.presets[i].buttons[j]);
+                }
+            }
+        }
+    }
+    UpdateFixedMotionSlots();
+
     LoadCircleModFromAnalogs();
     // Load touch screen coordinate bindings (nested: points -> keys)
     touch_points_param.clear();
@@ -1234,6 +1604,31 @@ void ConfigureInput::RestoreDefaults() {
     UpdateCircleModMultiKeySlots();
     UpdateTouchPointsMultiKeySlots();
 
+    // Reset motion/touch device defaults
+    Settings::values.current_input_profile.motion_device =
+        "engine:motion_emu,update_period:20,sensitivity:0.075,"
+        "tilt_clamp:90.0,tilt_max_angle:90.0,"
+        "mode:rate_continuous,default_tilt:90,"
+        "invert_pitch:true,invert_yaw:false,per_frame:true,"
+        "clamp_pitch_180:true,auto_tilt_y:true,"
+        "auto_tilt_y_invert:false,auto_tilt_x:false,"
+        "auto_tilt_speed:1.0";
+    Settings::values.current_input_profile.touch_device = "engine:emu_window";
+    // Reset Fixed Motion Override
+    Settings::values.current_input_profile.fixed_motion_config.clear();
+    for (auto& w : fixed_motion_widgets) {
+        w.slot_params.clear();
+        w.grav_x_label->setValue(0.0);
+        w.grav_y_label->setValue(-1.0);
+        w.grav_z_label->setValue(0.0);
+        w.rate_x_label->setValue(1.0);
+        w.rate_y_label->setValue(1.0);
+        w.rate_z_label->setValue(1.0);
+        w.container->setVisible(false);
+    }
+    if (!fixed_motion_widgets.empty())
+        fixed_motion_widgets[0].container->setVisible(true);
+    UpdateFixedMotionSlots();
     ApplyConfiguration();
     Settings::SaveProfile(Settings::values.current_input_profile_index);
 }
@@ -1291,7 +1686,14 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
         buttons_param[button_id].pop_back();
 
     int activeCount = (int)buttons_param[button_id].size();
-    bool needExtras = activeCount > 0;
+    // Only show extra slots when the primary button actually has a binding.
+    // Buttons with empty defaults (Home, Power, Debug, Gpio14) should not
+    // reveal [extra not set] slots until the user explicitly sets slot 0.
+    // NOTE: ParamPackage::Serialize() returns "[empty]" for empty data, not "".
+    bool hasPrimary = activeCount > 0 &&
+        !buttons_param[button_id][0].Serialize().empty() &&
+        buttons_param[button_id][0].Serialize() != "[empty]";
+    bool needExtras = hasPrimary;
 
     // Lazy creation: build the extra-slot container ONLY when bindings exist.
     // When bindings go to zero, destroy everything to guarantee zero layout footprint.
@@ -1397,7 +1799,7 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
                             UpdateMultiKeySlots(button_id);
                         });
                         context_menu.addSeparator();
-                        // Turbo / Toggle — always show menu for buttons that have bindings
+                        // Turbo / Toggle / Reverse — same as primary button slots
                         {
                             bool has_binding = false;
                             for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
@@ -1406,7 +1808,8 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
                             if (has_binding) {
                             bool is_turbo = (slotCapture < (int)buttons_param[button_id].size() &&
                                 buttons_param[button_id][slotCapture].Get("turbo", "0") == "1");
-                            // Toggle is per-button: check ALL slots
+                            bool is_latch = (slotCapture < (int)buttons_param[button_id].size() &&
+                                buttons_param[button_id][slotCapture].Get("latch", "0") == "1");
                             bool is_toggle = false;
                             for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
                                 if (buttons_param[button_id][s].Get("toggle", "0") == "1")
@@ -1418,8 +1821,15 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
                                     ApplyConfiguration();
                                     Settings::SaveProfile(ui->profile->currentIndex());
                                 });
-                            } else if (is_toggle) {
+                            } else if (is_latch) {
                                 context_menu.addAction(tr("Cancel Toggle"), this, [=] {
+                                    buttons_param[button_id][slotCapture].Erase("latch");
+                                    UpdateButtonColor(button_id, slotCapture);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                            } else if (is_toggle) {
+                                context_menu.addAction(tr("Cancel Reverse"), this, [=] {
                                     for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
                                         buttons_param[button_id][s].Erase("toggle");
                                     for (int s = 0; s < (int)button_map[button_id].size(); s++)
@@ -1430,14 +1840,28 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
                             } else {
                                 context_menu.addAction(tr("Set Turbo"), this, [=] {
                                     buttons_param[button_id][slotCapture].Erase("toggle");
+                                    buttons_param[button_id][slotCapture].Erase("latch");
                                     buttons_param[button_id][slotCapture].Set("turbo", "1");
                                     UpdateButtonColor(button_id, slotCapture);
                                     ApplyConfiguration();
                                     Settings::SaveProfile(ui->profile->currentIndex());
                                 });
-                                context_menu.addAction(tr("Set Toggle (Hold)"), this, [=] {
+                                context_menu.addAction(tr("Set Toggle"), this, [=] {
+                                    buttons_param[button_id][slotCapture].Erase("turbo");
+                                    buttons_param[button_id][slotCapture].Erase("toggle");
+                                    buttons_param[button_id][slotCapture].Set("latch", "1");
+                                    // Clear toggle (reverse) from other slots to avoid inversion
+                                    for (int s = 0; s < (int)buttons_param[button_id].size(); s++)
+                                        if (s != slotCapture) buttons_param[button_id][s].Erase("toggle");
+                                    for (int s = 0; s < (int)button_map[button_id].size(); s++)
+                                        UpdateButtonColor(button_id, s);
+                                    ApplyConfiguration();
+                                    Settings::SaveProfile(ui->profile->currentIndex());
+                                });
+                                context_menu.addAction(tr("Set Reverse"), this, [=] {
                                     for (int s = 0; s < (int)buttons_param[button_id].size(); s++) {
                                         buttons_param[button_id][s].Erase("turbo");
+                                        buttons_param[button_id][s].Erase("latch");
                                         buttons_param[button_id][s].Set("toggle", "1");
                                     }
                                     for (int s = 0; s < (int)button_map[button_id].size(); s++)
@@ -1462,8 +1886,7 @@ void ConfigureInput::UpdateMultiKeySlots(int button_id) {
         }
     }
 
-    int showCount = std::min(activeCount + 1, MAX_BINDINGS_PER_BUTTON);
-    showCount = std::max(showCount, 1);
+    int showCount = hasPrimary ? std::min(activeCount + 1, MAX_BINDINGS_PER_BUTTON) : 1;
 
     // Update text for the primary and any extras
     for (int slot = 0; slot < (int)button_map[button_id].size(); slot++) {
@@ -1512,10 +1935,14 @@ void ConfigureInput::UpdateButtonColor(int button_id, int slot) {
         return;
     }
     const auto& pkg = buttons_param[button_id][slot];
+    bool is_latch = pkg.Get("latch", "0") == "1";
     bool is_turbo = pkg.Get("turbo", "0") == "1";
     bool is_toggle = pkg.Get("toggle", "0") == "1";
     if (slot < (int)button_map[button_id].size()) {
-        if (is_turbo)
+        if (is_latch)
+            button_map[button_id][slot]->setStyleSheet(
+                QStringLiteral("background-color: #e65100; color: white;"));
+        else if (is_turbo)
             button_map[button_id][slot]->setStyleSheet(
                 QStringLiteral("background-color: #2e7d32; color: white;"));
         else if (is_toggle)
@@ -1743,6 +2170,10 @@ void ConfigureInput::AutoMap() {
 void ConfigureInput::HandleClick(QPushButton* button,
                                  std::function<void(const Common::ParamPackage&)> new_input_setter,
                                  InputCommon::Polling::DeviceType type) {
+    // Cancel any previous capture that may still be in progress
+    if (input_setter) {
+        SetPollingResult({}, true);
+    }
     previous_key_code = QKeySequence(button->text())[0].toCombined();
     button->setText(tr("[press key]"));
     button->setFocus();
@@ -1760,6 +2191,7 @@ void ConfigureInput::HandleClick(QPushButton* button,
 
     grabKeyboard();
     grabMouse();
+    installEventFilter(this);  // intercept Tab/Backtab before Qt focus system
     // Clear any stuck keys from previous dialog interactions
     if (auto* kb = InputCommon::GetKeyboard(); kb) {
         kb->ReleaseAllKeys();
@@ -1769,6 +2201,7 @@ void ConfigureInput::HandleClick(QPushButton* button,
 }
 
 void ConfigureInput::SetPollingResult(const Common::ParamPackage& params, bool abort) {
+    removeEventFilter(this);
     releaseKeyboard();
     releaseMouse();
     // Clear any key states that may have been set during the grab
@@ -1793,7 +2226,16 @@ void ConfigureInput::keyPressEvent(QKeyEvent* event) {
     if (!input_setter || !event)
         return;
 
-    if (event->key() != Qt::Key_Escape && event->key() != previous_key_code) {
+    // Tab/Backtab are consumed by Qt focus navigation; grab them explicitly
+    if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
+        event->accept();
+        if (want_keyboard_keys && !hotkey_list.contains(QKeySequence(event->key()))) {
+            SetPollingResult(Common::ParamPackage{InputCommon::GenerateKeyboardParam(event->key())}, false);
+        }
+        return;
+    }
+
+    if (event->key() != Qt::Key_Escape) {
         if (want_keyboard_keys) {
             // Only prevent conflicts with hotkeys, allow same key across multiple buttons
             if (hotkey_list.contains(QKeySequence(event->key()))) {
@@ -2120,8 +2562,19 @@ void ConfigureInput::UpdateTouchPointsMultiKeySlots() {
                           !touch_points_param[point][s].Serialize().empty());
             if (bound) {
                 btn->setText(ButtonToText(touch_points_param[point][s]));
+                // Color: latch=orange, turbo=green, toggle(reverse)=blue
+                const auto& pkg = touch_points_param[point][s];
+                if (pkg.Get("latch", "0") == "1")
+                    btn->setStyleSheet(QStringLiteral("background-color: #e65100; color: white;"));
+                else if (pkg.Get("turbo", "0") == "1")
+                    btn->setStyleSheet(QStringLiteral("background-color: #2e7d32; color: white;"));
+                else if (pkg.Get("toggle", "0") == "1")
+                    btn->setStyleSheet(QStringLiteral("background-color: #1565c0; color: white;"));
+                else
+                    btn->setStyleSheet({});
             } else {
                 btn->setText(tr("[not set]"));
+                btn->setStyleSheet({});
             }
             // Slot 0 is always visible when the point group is visible,
             // so the user can always set the primary key.
@@ -2143,4 +2596,83 @@ void ConfigureInput::UpdateTouchPointsMultiKeySlots() {
             }
         }
     }
+}
+
+void ConfigureInput::UpdateFixedMotionSlots() {
+    if (fixed_motion_widgets.empty()) return;
+    // Find the highest preset index that has any binding
+    int max_bound_idx = -1;
+    for (int p = 0; p < (int)fixed_motion_widgets.size(); p++) {
+        for (const auto& s : fixed_motion_widgets[p].slot_params) {
+            if (!s.isEmpty()) { max_bound_idx = p; break; }
+        }
+    }
+    // Show presets 0 through (max_bound + 1), so the next empty slot is always ready
+    int tail_idx = (max_bound_idx >= 0) ? (max_bound_idx + 1) : 0;
+    if (tail_idx >= (int)fixed_motion_widgets.size())
+        tail_idx = (int)fixed_motion_widgets.size() - 1;
+    for (int p = 0; p < (int)fixed_motion_widgets.size(); p++) {
+        auto& w = fixed_motion_widgets[p];
+        bool should_show = (p <= tail_idx);
+        w.container->setVisible(should_show);
+        if (!should_show) continue;
+        for (int s = 0; s < (int)w.slot_btns.size(); s++) {
+            bool has_current = (s < (int)w.slot_params.size() && !w.slot_params[s].isEmpty());
+            bool prev_is_set = (s == 0) || (s - 1 < (int)w.slot_params.size() && !w.slot_params[s - 1].isEmpty());
+            bool show = (s == 0) || prev_is_set;
+            w.slot_btns[s]->setVisible(show);
+            if (has_current) {
+                w.slot_btns[s]->setText(ButtonToText(Common::ParamPackage(w.slot_params[s].toStdString())));
+            } else if (show) {
+                w.slot_btns[s]->setText(tr("[not set]"));
+            }
+        }
+    }
+    UpdateFixedMotionButtonColors();
+}
+
+void ConfigureInput::UpdateFixedMotionButtonColors() {
+    for (int p = 0; p < (int)fixed_motion_widgets.size(); p++) {
+        auto& w = fixed_motion_widgets[p];
+        if (!w.container) continue;
+        // Check if any slot has reverse → all buttons turn blue
+        bool any_reverse = false;
+        for (size_t s = 0; s < w.slot_params.size(); s++) {
+            if (!w.slot_params[s].isEmpty()) {
+                Common::ParamPackage pp(w.slot_params[s].toStdString());
+                if (pp.Get("reverse", "0") == "1") { any_reverse = true; break; }
+            }
+        }
+        for (int s = 0; s < (int)w.slot_btns.size(); s++) {
+            if (s >= (int)w.slot_btns.size() || !w.slot_btns[s]) continue;
+            if (any_reverse)
+                w.slot_btns[s]->setStyleSheet(QStringLiteral("background-color: #1565c0; color: white;"));
+            else if (s < (int)w.slot_params.size() && !w.slot_params[s].isEmpty()) {
+                Common::ParamPackage pp(w.slot_params[s].toStdString());
+                if (pp.Get("toggle", "0") == "1")
+                    w.slot_btns[s]->setStyleSheet(QStringLiteral("background-color: #e65100; color: white;"));
+                else if (pp.Get("turbo", "0") == "1")
+                    w.slot_btns[s]->setStyleSheet(QStringLiteral("background-color: #2e7d32; color: white;"));
+                else
+                    w.slot_btns[s]->setStyleSheet({});
+            } else {
+                w.slot_btns[s]->setStyleSheet({});
+            }
+        }
+    }
+}
+
+bool ConfigureInput::eventFilter(QObject* obj, QEvent* event) {
+    if (event->type() == QEvent::Wheel && qobject_cast<QSlider*>(obj)) {
+        return true;
+    }
+    // Intercept Tab/Backtab during key capture so Qt doesn't move focus
+    if (obj == this && event->type() == QEvent::KeyPress) {
+        auto* keyEvent = static_cast<QKeyEvent*>(event);
+        if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab) {
+            keyPressEvent(keyEvent);
+            return true;
+        }
+    }
+    return QWidget::eventFilter(obj, event);
 }

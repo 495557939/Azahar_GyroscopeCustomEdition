@@ -748,6 +748,16 @@ void GRenderWindow::PollControllerLink() {
     // Read base multiplier settings (default link_speed 1.0)
     const float link_speed = motion_param.Get("link_speed", 1.0f);
 
+    // Per-link invert flags
+    const bool cstick_inv_ud  = motion_param.Get("link_cstick_inv_ud", false);
+    const bool cstick_inv_lr  = motion_param.Get("link_cstick_inv_lr", false);
+    const bool cpad_inv_ud    = motion_param.Get("link_cpad_inv_ud", false);
+    const bool cpad_inv_lr    = motion_param.Get("link_cpad_inv_lr", false);
+    const bool dpad_inv_ud    = motion_param.Get("link_dpad_inv_ud", false);
+    const bool dpad_inv_lr    = motion_param.Get("link_dpad_inv_lr", false);
+    const bool abxy_inv_ud    = motion_param.Get("link_abxy_inv_ud", false);
+    const bool abxy_inv_lr    = motion_param.Get("link_abxy_inv_lr", false);
+
     constexpr float DEADZONE = 0.15f;
     constexpr float STICK_BASE = 8.0f;
     constexpr float BUTTON_BASE = 8.0f;
@@ -875,10 +885,14 @@ void GRenderWindow::PollControllerLink() {
     const auto& profile = Settings::values.current_input_profile;
     float adx = 0.0f, ady = 0.0f;
     if (link_cstick && ReadAnalogDir(profile.analogs[Settings::NativeAnalog::CStick], adx, ady)) {
+        if (cstick_inv_lr) adx = -adx;
+        if (cstick_inv_ud) ady = -ady;
         total_dx += adx;
         total_dy += ady;
     }
     if (link_circle && ReadAnalogDir(profile.analogs[Settings::NativeAnalog::CirclePad], adx, ady)) {
+        if (cpad_inv_lr) adx = -adx;
+        if (cpad_inv_ud) ady = -ady;
         total_dx += adx;
         total_dy += ady;
     }
@@ -914,8 +928,15 @@ void GRenderWindow::PollControllerLink() {
             if (s > strength) strength = s;
         }
         if (strength > 0.0f) {
-            total_dx += it->second.dx * strength;
-            total_dy += it->second.dy * strength;
+            // Determine invert category for this button
+            bool is_dpad = (btn == Settings::NativeButton::Up ||
+                            btn == Settings::NativeButton::Down ||
+                            btn == Settings::NativeButton::Left ||
+                            btn == Settings::NativeButton::Right);
+            float fx = is_dpad ? (dpad_inv_lr ? -1.0f : 1.0f) : (abxy_inv_lr ? -1.0f : 1.0f);
+            float fy = is_dpad ? (dpad_inv_ud ? -1.0f : 1.0f) : (abxy_inv_ud ? -1.0f : 1.0f);
+            total_dx += it->second.dx * strength * fx;
+            total_dy += it->second.dy * strength * fy;
         }
     }
 
@@ -931,9 +952,13 @@ void GRenderWindow::PollControllerLink() {
     if (!motion_emu)
         return;
 
-    // Feed horizontal stick delta to [BETA] Auto X-axis tilt
-    if (motion_param.Get("auto_tilt_x", false))
+    // Feed horizontal stick delta to [BETA] Auto X-axis tilt.
+    // Only feed when controller links are actually configured to avoid
+    // overwriting auto_roll_target with 0 every poll cycle.
+    if (motion_param.Get("auto_tilt_x", false) &&
+        (link_cstick || link_circle || link_dpad || link_abxy)) {
         motion_emu->SetAutoRollTarget(total_dx);
+    }
 
     if (total_dx == 0.0f && total_dy == 0.0f)
         return;

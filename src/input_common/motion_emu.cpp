@@ -1,4 +1,4 @@
-// Copyright 2017 Citra Emulator Project
+﻿// Copyright 2017 Citra Emulator Project
 // Licensed under GPLv2 or any later version
 // Refer to the license.txt file included.
 
@@ -11,7 +11,9 @@
 #include "common/math_util.h"
 #include "common/quaternion.h"
 #include "common/thread.h"
+#include "common/settings.h"
 #include "common/vector_math.h"
+#include "input_common/fixed_motion.h"
 #include "input_common/motion_emu.h"
 
 namespace InputCommon {
@@ -25,7 +27,8 @@ public:
                     bool clamp_pitch_180,
                     bool auto_tilt_y, bool auto_tilt_y_invert, bool auto_tilt_x,
                     float auto_tilt_speed, float auto_tilt_y_return_speed,
-                    int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip)
+                    int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip,
+                    float auto_tilt_x_max_angle)
         : update_millisecond(update_millisecond),
           update_duration(std::chrono::duration_cast<std::chrono::steady_clock::duration>(
               std::chrono::milliseconds(update_millisecond))),
@@ -34,10 +37,11 @@ public:
           invert_pitch(invert_pitch), invert_yaw(invert_yaw),
           per_frame(per_frame), clamp_pitch_180(clamp_pitch_180),
           auto_tilt_y(auto_tilt_y), auto_tilt_y_invert(auto_tilt_y_invert),
-          auto_tilt_x(auto_tilt_x), auto_tilt_speed(auto_tilt_speed),
+          auto_tilt_x(false), auto_tilt_speed(auto_tilt_speed),
           auto_tilt_y_return_speed(auto_tilt_y_return_speed),
           auto_tilt_y_max_angle(auto_tilt_y_max_angle),
           auto_tilt_y_prevent_flip(auto_tilt_y_prevent_flip),
+          auto_tilt_x_max_angle(auto_tilt_x_max_angle),
           q_accumulated(Common::MakeQuaternion(Common::Vec3<float>(), 0)),
           last_status_time(std::chrono::steady_clock::now()),
           last_rate_compute(std::chrono::steady_clock::now()),
@@ -94,11 +98,21 @@ public:
             mouse_origin = Common::MakeVec(x, y);
         }
 
-        // [BETA] Auto X-tilt: horizontal mouse movement sets roll target
+        // [BETA] Auto X-tilt: position-based mapping.
+        // Tilt() is a snapshot of mouse position, not a delta, so we OVERWRITE position.
+        // Target follows position*gain. 80ms after last input, position decays to 0 at
+        // return_rate_px (800 px/sec) → target follows → smooth re-centering.
         if (auto_tilt_x && is_active) {
             float dx = static_cast<float>(mouse_move.x);
-            // 1 pixel ≈ 2° of roll, clamped ±90°, scaled by speed
-            auto_roll_target = std::clamp(dx * 2.0f * auto_tilt_speed, -90.0f, 90.0f);
+            auto_roll_position = dx;
+            float max_abs = std::abs(auto_tilt_x_max_angle);
+            float max_pos = (std::abs(auto_tilt_speed) > 0.01f)
+                                ? max_abs / (0.5f * std::abs(auto_tilt_speed))
+                                : max_abs;
+            auto_roll_position = std::clamp(auto_roll_position, -max_pos, max_pos);
+            auto_roll_target = std::clamp(auto_roll_position * 0.5f * auto_tilt_speed,
+                                          -max_abs, max_abs);
+            last_mouse_input_time = std::chrono::steady_clock::now();
         }
     }
 
@@ -112,8 +126,9 @@ public:
         rate_delta = Common::Vec2<float>{};
         tilt_offset_yaw = 0.0f;
         tilt_offset_pitch = 0.0f;
-        // Reset auto-roll target only; current roll decays smoothly
+        // Reset auto-roll target and position so next activation starts fresh
         auto_roll_target = 0.0f;
+        auto_roll_position = 0.0f;
         // Reset auto-tilt accumulators so next activation starts fresh
         q_accumulated = Common::MakeQuaternion(Common::Vec3<float>(), 0);
         accumulated_tilt_pitch = 0.0f;
@@ -153,7 +168,7 @@ public:
         out_yaw = invert_yaw;
     }
 
-    // AddDelta: accumulate pixel delta (used by RateContinuous global timer).
+    // AddDelta: accumulate pixel delta (used by RateContinuous/RateHold timers).
     void AddDelta(float dx, float dy) {
         if (!is_active)
             return;
@@ -162,6 +177,20 @@ public:
         rate_delta.y += dy;
         if (dx != 0.0f || dy != 0.0f)
             last_mouse_input_time = std::chrono::steady_clock::now();
+        // [BETA] Auto X-tilt: position-based with clamping.
+        // dx is a true delta (not snapshot), so ACCUMULATE position.
+        // Clamp position to ±max_pos to prevent unbounded growth under continuous input
+        // (e.g. C-stick held 1s previously gave 107s re-centering).
+        if (auto_tilt_x) {
+            auto_roll_position += dx;
+            float max_abs = std::abs(auto_tilt_x_max_angle);
+            float max_pos = (std::abs(auto_tilt_speed) > 0.01f)
+                                ? max_abs / (0.5f * std::abs(auto_tilt_speed))
+                                : max_abs;
+            auto_roll_position = std::clamp(auto_roll_position, -max_pos, max_pos);
+            auto_roll_target = std::clamp(auto_roll_position * 0.5f * auto_tilt_speed,
+                                          -max_abs, max_abs);
+        }
     }
 
     // SetTiltOffset: feed yaw/pitch radians for TiltContinuous / TiltHold gravity modes.
@@ -178,11 +207,20 @@ public:
     }
 
     // Feed an external horizontal input to auto X-tilt (e.g. right stick).
-    // Scale: ~20° at BUTTON_BASE=8 with speed=1, clamped ±90°.
+    // Treat external input as a delta: position += dx*2 (the *2 keeps BUTTON_BASE=8
+    // stick deflection roughly equivalent to 16px of mouse movement).
+    // Same gain/EMA/decay pipeline as AddDelta so all input paths behave identically.
     void SetAutoRollTarget(float dx) {
         std::lock_guard guard{tilt_mutex};
-        float target = dx * 2.5f * auto_tilt_speed;
-        auto_roll_target = std::clamp(target, -90.0f, 90.0f);
+        auto_roll_position += dx * 2.0f;
+        float max_abs = std::abs(auto_tilt_x_max_angle);
+        float max_pos = (std::abs(auto_tilt_speed) > 0.01f)
+                            ? max_abs / (0.5f * std::abs(auto_tilt_speed))
+                            : max_abs;
+        auto_roll_position = std::clamp(auto_roll_position, -max_pos, max_pos);
+        auto_roll_target = std::clamp(auto_roll_position * 0.5f * auto_tilt_speed,
+                                      -max_abs, max_abs);
+        last_mouse_input_time = std::chrono::steady_clock::now();
     }
 
     std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() {
@@ -194,7 +232,7 @@ public:
             last_status_time = now;
 
             if (dt_ms > 0.0f && dt_ms < 1000.0f) {
-                // Same lock order as the thread: tilt_mutex → status_mutex
+                // Same lock order as the thread: tilt_mutex →status_mutex
                 std::lock_guard tilt_guard{tilt_mutex};
                 if (is_active) {
                     if (mode == MotionEmuMode::TiltContinuous ||
@@ -231,10 +269,24 @@ public:
                         float sp = std::sin(tilt_offset_pitch);
                         gravity = Common::MakeVec(gx, gravity.y * cp + gz * sp,
                                                   -gravity.y * sp + gz * cp);
-                        // [BETA] Auto X-tilt: apply smoothed roll around Z axis
+                        // [BETA] Auto X-tilt: apply smoothed roll around Z axis.
+                        // Adaptive EMA: 0.20 when far from target, 0.70 when close.
+                        // Position decays to 0 at 800 px/sec after 80ms idle.
                         if (auto_tilt_x) {
-                            // Smooth decay when target is 0; fast approach when active
-                            float decay = (auto_roll_target == 0.0f) ? 0.90f : 0.70f;
+                            auto since_input = std::chrono::duration<float, std::milli>(
+                                now - last_mouse_input_time).count();
+                            if (since_input > 80.0f) {
+                                float step = return_rate_px * (dt_ms / 1000.0f);
+                                if (auto_roll_position > 0.0f)
+                                    auto_roll_position = std::max(0.0f, auto_roll_position - step);
+                                else if (auto_roll_position < 0.0f)
+                                    auto_roll_position = std::min(0.0f, auto_roll_position + step);
+                                float max_abs = std::abs(auto_tilt_x_max_angle);
+                                auto_roll_target = std::clamp(
+                                    auto_roll_position * 0.5f * auto_tilt_speed, -max_abs, max_abs);
+                            }
+                            float decay = (std::abs(auto_roll_target - auto_roll) > 5.0f)
+                                              ? 0.20f : 0.70f;
                             auto_roll = auto_roll * decay + auto_roll_target * (1.0f - decay);
                             float rr = auto_roll * Common::PI / 180.0f;
                             float cr = std::cos(rr);
@@ -269,7 +321,7 @@ public:
                             auto instant_rate = Common::Vec3<float>{
                                 pitch_s * diff.y * rate_scale,
                                 0.0f,
-                                yaw_s * diff.x * rate_scale,
+                                auto_tilt_x ? 0.0f : yaw_s * diff.x * rate_scale,
                             };
                             // EMA-smooth the angular rate to eliminate integer-pixel
                             // stepping from the 5-ms AddDelta tick granularity.
@@ -283,7 +335,7 @@ public:
                         auto angular_rate = smoothed_rate;
                         float raw_rate_x = angular_rate.x; // gate: pre-clamp rate
 
-                        // Clamp pitch rotation to ±90° to prevent 3DS view flipping
+                        // Clamp pitch rotation to 卤90掳 to prevent 3DS view flipping
                         if (clamp_pitch_180) {
                             float dt_sec = smoothed_dt_ms / 1000.0f;
                             float new_pitch = accumulated_pitch + angular_rate.x * dt_sec;
@@ -345,9 +397,23 @@ public:
                             Common::MakeVec(0.0f, -std::cos(effective_tilt_rad),
                                             -std::sin(effective_tilt_rad));
 
-                        // [BETA] Auto X-tilt: apply smoothed roll around Z axis
+                        // [BETA] Auto X-tilt: apply smoothed roll around Z axis.
+                        // Adaptive EMA + position decay (see Absolute path for full rationale).
                         if (auto_tilt_x) {
-                            float decay = (auto_roll_target == 0.0f) ? 0.90f : 0.70f;
+                            auto since_input = std::chrono::duration<float, std::milli>(
+                                now - last_mouse_input_time).count();
+                            if (since_input > 80.0f) {
+                                float step = return_rate_px * (dt_ms / 1000.0f);
+                                if (auto_roll_position > 0.0f)
+                                    auto_roll_position = std::max(0.0f, auto_roll_position - step);
+                                else if (auto_roll_position < 0.0f)
+                                    auto_roll_position = std::min(0.0f, auto_roll_position + step);
+                                float max_abs = std::abs(auto_tilt_x_max_angle);
+                                auto_roll_target = std::clamp(
+                                    auto_roll_position * 0.5f * auto_tilt_speed, -max_abs, max_abs);
+                            }
+                            float decay = (std::abs(auto_roll_target - auto_roll) > 5.0f)
+                                              ? 0.20f : 0.70f;
                             auto_roll = auto_roll * decay + auto_roll_target * (1.0f - decay);
                             float rr = auto_roll * Common::PI / 180.0f;
                             float cr = std::cos(rr);
@@ -364,7 +430,7 @@ public:
                     }
                 }
                 // per_frame: rate_delta is managed via diff tracking (last_rate_delta).
-                // Do NOT reset here — let AddDelta continue accumulating.
+                // Do NOT reset here →let AddDelta continue accumulating.
             }
         }
         std::lock_guard guard{status_mutex};
@@ -391,6 +457,7 @@ private:
     const float auto_tilt_y_return_speed;
     const int auto_tilt_y_max_angle;
     const bool auto_tilt_y_prevent_flip;
+    const float auto_tilt_x_max_angle;
 
     Common::Vec2<int> mouse_origin;
 
@@ -407,6 +474,11 @@ private:
     Common::Quaternion<float> q_accumulated; // Auto Y-tilt: persistent orientation quaternion
     float auto_roll = 0.0f;                  // [BETA] Auto X-tilt: current roll angle (degrees)
     float auto_roll_target = 0.0f;           // [BETA] Auto X-tilt: target roll angle (degrees)
+    float auto_roll_position = 0.0f;         // [BETA] Auto X-tilt: virtual mouse position (px, accumulated)
+    // Max accumulated position to prevent unbounded growth:
+    // max_pos = max_angle / (0.5 * speed), computed at each path before clamp.
+    // Position decay rate (px/sec) when no input for 80ms; was 150 (too slow).
+    static constexpr float return_rate_px = 800.0f;
     float tilt_offset_yaw = 0.0f;
     float tilt_offset_pitch = 0.0f;
     std::chrono::steady_clock::time_point last_mouse_input_time;
@@ -415,13 +487,13 @@ private:
     // Clamp accumulated_tilt_pitch to user-configured limits
     // Works correctly regardless of which direction accumulated corresponds to "up"
     float ClampAutoTiltPitch(float val) const {
-        // 1. Max angle: ±min(auto_tilt_y_max_angle, tilt_max_angle) — symmetric
+        // 1. Max angle: 卤min(auto_tilt_y_max_angle, tilt_max_angle) →symmetric
         float at_max = auto_tilt_y_max_angle * Common::PI / 180.0f;
         float tm_max = tilt_max_angle * Common::PI / 180.0f;
         float max_rad = std::min(at_max, tm_max);
         val = std::clamp(val, -max_rad, max_rad);
-        // 2. Prevent flip: keep effective = default_tilt + val within [0°, 180°]
-        //    effective = dt_rad + val ∈ [0, π]  →  val ∈ [−dt_rad, π−dt_rad]
+        // 2. Prevent flip: keep effective = default_tilt + val within [0掳, 180掳]
+        //    effective = dt_rad + val →[0, 蟺]  → val →[鈭抎t_rad, 蟺鈭抎t_rad]
         if (auto_tilt_y_prevent_flip) {
             float dt_rad = default_tilt * Common::PI / 180.0f;
             float lo = -dt_rad;
@@ -482,9 +554,23 @@ private:
                 gravity = QuaternionRotate(inv_q, gravity);
                 angular_rate = QuaternionRotate(q.Inverse(), angular_rate);
 
-                // [BETA] Auto X-tilt: apply smoothed roll around Z (forward) axis
+                // [BETA] Auto X-tilt: apply smoothed roll around Z (forward) axis.
+                // Adaptive EMA + position decay (Thread uses update_millisecond for dt).
                 if (auto_tilt_x) {
-                    float decay = (auto_roll_target == 0.0f) ? 0.90f : 0.70f;
+                    auto since_input = std::chrono::duration<float, std::milli>(
+                        std::chrono::steady_clock::now() - last_mouse_input_time).count();
+                    if (since_input > 80.0f) {
+                        float step = return_rate_px * (update_millisecond / 1000.0f);
+                        if (auto_roll_position > 0.0f)
+                            auto_roll_position = std::max(0.0f, auto_roll_position - step);
+                        else if (auto_roll_position < 0.0f)
+                            auto_roll_position = std::min(0.0f, auto_roll_position + step);
+                        float max_abs = std::abs(auto_tilt_x_max_angle);
+                        auto_roll_target = std::clamp(
+                            auto_roll_position * 0.5f * auto_tilt_speed, -max_abs, max_abs);
+                    }
+                    float decay = (std::abs(auto_roll_target - auto_roll) > 5.0f)
+                                      ? 0.20f : 0.70f;
                     auto_roll = auto_roll * decay + auto_roll_target * (1.0f - decay);
                     float rr = auto_roll * Common::PI / 180.0f;
                     float cr = std::cos(rr);
@@ -539,9 +625,23 @@ private:
                     float sp = std::sin(pitch);
                     gravity = Common::MakeVec(gx, gravity.y * cp + gz * sp,
                                               -gravity.y * sp + gz * cp);
-                    // [BETA] Auto X-tilt: apply smoothed roll around Z axis
+                    // [BETA] Auto X-tilt: apply smoothed roll around Z axis.
+                    // Adaptive EMA + position decay (Thread uses update_millisecond for dt).
                     if (auto_tilt_x) {
-                        float decay = (auto_roll_target == 0.0f) ? 0.90f : 0.70f;
+                        auto since_input = std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - last_mouse_input_time).count();
+                        if (since_input > 80.0f) {
+                            float step = return_rate_px * (update_millisecond / 1000.0f);
+                            if (auto_roll_position > 0.0f)
+                                auto_roll_position = std::max(0.0f, auto_roll_position - step);
+                            else if (auto_roll_position < 0.0f)
+                                auto_roll_position = std::min(0.0f, auto_roll_position + step);
+                            float max_abs = std::abs(auto_tilt_x_max_angle);
+                            auto_roll_target = std::clamp(
+                                auto_roll_position * 0.5f * auto_tilt_speed, -max_abs, max_abs);
+                        }
+                        float decay = (std::abs(auto_roll_target - auto_roll) > 5.0f)
+                                          ? 0.20f : 0.70f;
                         auto_roll = auto_roll * decay + auto_roll_target * (1.0f - decay);
                         float rr = auto_roll * Common::PI / 180.0f;
                         float cr = std::cos(rr);
@@ -566,14 +666,14 @@ private:
                             float yaw_s = invert_yaw ? 1.0f : -1.0f;
                             angular_rate.x = pitch_s * rate_delta.y * rate_scale;
                             angular_rate.y = 0.0f;
-                            angular_rate.z = yaw_s * rate_delta.x * rate_scale;
+                            angular_rate.z = auto_tilt_x ? 0.0f : yaw_s * rate_delta.x * rate_scale;
                         }
                         rate_delta = Common::Vec2<float>{};
                     }
 
                     float raw_rate_x = angular_rate.x; // gate: pre-clamp rate
 
-                    // Clamp pitch rotation to ±90° to prevent 3DS view flipping
+                    // Clamp pitch rotation to 卤90掳 to prevent 3DS view flipping
                     if (clamp_pitch_180) {
                         float dt_sec = update_millisecond / 1000.0f;
                         float new_pitch = accumulated_pitch + angular_rate.x * dt_sec;
@@ -631,9 +731,23 @@ private:
                         Common::MakeVec(0.0f, -std::cos(effective_tilt_rad),
                                         -std::sin(effective_tilt_rad));
 
-                    // [BETA] Auto X-tilt: apply smoothed roll around Z axis
+                    // [BETA] Auto X-tilt: apply smoothed roll around Z axis.
+                    // Adaptive EMA + position decay (Thread uses update_millisecond for dt).
                     if (auto_tilt_x) {
-                        float decay = (auto_roll_target == 0.0f) ? 0.90f : 0.70f;
+                        auto since_input = std::chrono::duration<float, std::milli>(
+                            std::chrono::steady_clock::now() - last_mouse_input_time).count();
+                        if (since_input > 80.0f) {
+                            float step = return_rate_px * (update_millisecond / 1000.0f);
+                            if (auto_roll_position > 0.0f)
+                                auto_roll_position = std::max(0.0f, auto_roll_position - step);
+                            else if (auto_roll_position < 0.0f)
+                                auto_roll_position = std::min(0.0f, auto_roll_position + step);
+                            float max_abs = std::abs(auto_tilt_x_max_angle);
+                            auto_roll_target = std::clamp(
+                                auto_roll_position * 0.5f * auto_tilt_speed, -max_abs, max_abs);
+                        }
+                        float decay = (std::abs(auto_roll_target - auto_roll) > 5.0f)
+                                          ? 0.20f : 0.70f;
                         auto_roll = auto_roll * decay + auto_roll_target * (1.0f - decay);
                         float rr = auto_roll * Common::PI / 180.0f;
                         float cr = std::cos(rr);
@@ -666,7 +780,8 @@ public:
                            bool clamp_pitch_180,
                            bool auto_tilt_y, bool auto_tilt_y_invert, bool auto_tilt_x,
                            float auto_tilt_speed, float auto_tilt_y_return_speed,
-                           int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip) {
+                           int auto_tilt_y_max_angle, bool auto_tilt_y_prevent_flip,
+                           float auto_tilt_x_max_angle) {
         device = std::make_shared<MotionEmuDevice>(update_millisecond, sensitivity, tilt_clamp,
                                                     mode, deadzone, default_tilt,
                                                     tilt_max_angle,
@@ -675,7 +790,8 @@ public:
                                                     auto_tilt_y, auto_tilt_y_invert, auto_tilt_x,
                                                     auto_tilt_speed, auto_tilt_y_return_speed,
                                                     auto_tilt_y_max_angle,
-                                                    auto_tilt_y_prevent_flip);
+                                                    auto_tilt_y_prevent_flip,
+                                                    auto_tilt_x_max_angle);
     }
 
     bool IsDeviceActive() const {
@@ -704,7 +820,21 @@ public:
     }
 
     std::tuple<Common::Vec3<float>, Common::Vec3<float>> GetStatus() const override {
-        return device->GetStatus();
+        auto [grav, rate] = device->GetStatus();
+
+        // Fixed Motion Override (always enabled if keys are bound)
+        InputCommon::FixedMotionConfig fm_cfg;
+        fm_cfg.LoadFromParams(Settings::values.current_input_profile.fixed_motion_config);
+        if (auto override_val = InputCommon::GetFixedMotionOverride(fm_cfg)) {
+            auto g = override_val->first;
+            // Normalize gravity to unit length (1G) — only direction matters
+            float len = g.Length();
+            if (len > 0.001f)
+                g = g / len;
+            return std::make_tuple(g, override_val->second);
+        }
+
+        return std::make_tuple(grav, rate);
     }
 
     void GetInvertFlags(bool& out_pitch, bool& out_yaw) const {
@@ -745,6 +875,7 @@ std::unique_ptr<Input::MotionDevice> MotionEmu::Create(const Common::ParamPackag
     float auto_tilt_y_return_speed = params.Get("auto_tilt_y_return_speed", 0.0f);
     int auto_tilt_y_max_angle = params.Get("auto_tilt_y_max_angle", 180);
     bool auto_tilt_y_prevent_flip = params.Get("auto_tilt_y_prevent_flip", true);
+    float auto_tilt_x_max_angle = params.Get("auto_tilt_x_max_angle", 45.0f);
     MotionEmuMode mode = ParseMotionMode(params.Get("mode", "absolute"));
 
     current_mode = mode;
@@ -759,7 +890,8 @@ std::unique_ptr<Input::MotionDevice> MotionEmu::Create(const Common::ParamPackag
                                                                     auto_tilt_x, auto_tilt_speed,
                                                                     auto_tilt_y_return_speed,
                                                                     auto_tilt_y_max_angle,
-                                                                    auto_tilt_y_prevent_flip);
+                                                                    auto_tilt_y_prevent_flip,
+                                                                    auto_tilt_x_max_angle);
     // Previously created device is disconnected here. Having two motion devices for 3DS is not
     // expected.
     current_device = device_wrapper->device;

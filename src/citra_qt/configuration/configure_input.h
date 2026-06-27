@@ -46,6 +46,7 @@ public:
 
 protected:
     void showEvent(QShowEvent* event) override;
+    bool event(QEvent* event) override;
 
 public:
     /// Save the current input profile index
@@ -208,6 +209,10 @@ private:
 
     /// The key code of the previous state of the key being currently bound.
     int previous_key_code;
+
+    /// Old focus policy of button being captured (to restore after Tab capture)
+    Qt::FocusPolicy capture_old_focus_policy = Qt::TabFocus;
+    QPushButton* capture_button = nullptr;
 
     /// Finish polling and configure input using the input_setter
     void SetPollingResult(const Common::ParamPackage& params, bool abort);

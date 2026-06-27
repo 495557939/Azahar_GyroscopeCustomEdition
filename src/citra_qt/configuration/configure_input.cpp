@@ -1326,6 +1326,23 @@ ConfigureInput::ConfigureInput(Core::System& _system, QWidget* parent)
 
 ConfigureInput::~ConfigureInput() = default;
 
+bool ConfigureInput::event(QEvent* ev) {
+    // Intercept Tab/Backtab before QWidget::event() handles focus navigation.
+    // keyPressEvent must be deferred via singleShot — calling it synchronously
+    // from within event() dispatch would release the keyboard grab mid-dispatch.
+    if (ev->type() == QEvent::KeyPress && input_setter) {
+        auto* ke = static_cast<QKeyEvent*>(ev);
+        if (ke->key() == Qt::Key_Tab || ke->key() == Qt::Key_Backtab) {
+            QTimer::singleShot(0, this, [this, key = ke->key()]() {
+                QKeyEvent e(QEvent::KeyPress, key, Qt::NoModifier);
+                keyPressEvent(&e);
+            });
+            return true;
+        }
+    }
+    return QWidget::event(ev);
+}
+
 void ConfigureInput::showEvent(QShowEvent* event) {
     QWidget::showEvent(event);
     // Touch point extra buttons and FM preset slots need the widget tree to be
@@ -2177,6 +2194,10 @@ void ConfigureInput::HandleClick(QPushButton* button,
     previous_key_code = QKeySequence(button->text())[0].toCombined();
     button->setText(tr("[press key]"));
     button->setFocus();
+    // Block Tab focus chain during capture so Tab can be bound
+    capture_old_focus_policy = button->focusPolicy();
+    capture_button = button;
+    button->setFocusPolicy(Qt::NoFocus);
 
     input_setter = new_input_setter;
 
@@ -2191,7 +2212,6 @@ void ConfigureInput::HandleClick(QPushButton* button,
 
     grabKeyboard();
     grabMouse();
-    installEventFilter(this);  // intercept Tab/Backtab before Qt focus system
     // Clear any stuck keys from previous dialog interactions
     if (auto* kb = InputCommon::GetKeyboard(); kb) {
         kb->ReleaseAllKeys();
@@ -2201,7 +2221,11 @@ void ConfigureInput::HandleClick(QPushButton* button,
 }
 
 void ConfigureInput::SetPollingResult(const Common::ParamPackage& params, bool abort) {
-    removeEventFilter(this);
+    // Restore focus policy if we changed it for Tab capture
+    if (capture_button) {
+        capture_button->setFocusPolicy(capture_old_focus_policy);
+        capture_button = nullptr;
+    }
     releaseKeyboard();
     releaseMouse();
     // Clear any key states that may have been set during the grab
@@ -2226,10 +2250,10 @@ void ConfigureInput::keyPressEvent(QKeyEvent* event) {
     if (!input_setter || !event)
         return;
 
-    // Tab/Backtab are consumed by Qt focus navigation; grab them explicitly
+    // Tab/Backtab: handled via event() override, treat like any other key here
     if (event->key() == Qt::Key_Tab || event->key() == Qt::Key_Backtab) {
         event->accept();
-        if (want_keyboard_keys && !hotkey_list.contains(QKeySequence(event->key()))) {
+        if (want_keyboard_keys) {
             SetPollingResult(Common::ParamPackage{InputCommon::GenerateKeyboardParam(event->key())}, false);
         }
         return;
@@ -2665,14 +2689,6 @@ void ConfigureInput::UpdateFixedMotionButtonColors() {
 bool ConfigureInput::eventFilter(QObject* obj, QEvent* event) {
     if (event->type() == QEvent::Wheel && qobject_cast<QSlider*>(obj)) {
         return true;
-    }
-    // Intercept Tab/Backtab during key capture so Qt doesn't move focus
-    if (obj == this && event->type() == QEvent::KeyPress) {
-        auto* keyEvent = static_cast<QKeyEvent*>(event);
-        if (keyEvent->key() == Qt::Key_Tab || keyEvent->key() == Qt::Key_Backtab) {
-            keyPressEvent(keyEvent);
-            return true;
-        }
     }
     return QWidget::eventFilter(obj, event);
 }

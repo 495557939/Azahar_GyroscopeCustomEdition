@@ -83,7 +83,9 @@ void UnregisterFactory(const std::string& name) {
 template <typename InputDeviceType>
 std::unique_ptr<InputDeviceType> CreateDevice(const std::string& params) {
     const Common::ParamPackage package(params);
-    const std::string engine = package.Get("engine", "null");
+    std::string engine = package.Get("engine", "null");
+    // Strip trailing garbage (null bytes etc.) that may corrupt engine matching
+    engine = engine.c_str();
     const auto& factory_list = Impl::FactoryList<InputDeviceType>::list;
     const auto pair = factory_list.find(engine);
     if (pair == factory_list.end()) {

@@ -873,6 +873,29 @@ std::string AppDataRoamingDirectory() {
 }
 #else
 /**
+ * @return The directory the executable is in on POSIX systems
+ */
+const std::string& GetExeDirectory() {
+    static std::string exe_path;
+    if (exe_path.empty()) {
+        char buf[PATH_MAX];
+        ssize_t len = readlink("/proc/self/exe", buf, sizeof(buf) - 1);
+        if (len != -1) {
+            buf[len] = '\0';
+            exe_path = buf;
+            exe_path = exe_path.substr(0, exe_path.find_last_of('/'));
+        }
+        // Fallback: use current working directory
+        if (exe_path.empty()) {
+            char cwd[PATH_MAX];
+            if (getcwd(cwd, sizeof(cwd)))
+                exe_path = cwd;
+        }
+    }
+    return exe_path;
+}
+
+/**
  * @return The user’s home directory on POSIX systems
  */
 const std::string GetHomeDirectory() {
@@ -1521,46 +1544,6 @@ std::size_t IOFile::WriteImpl(const void* data, std::size_t length, std::size_t 
 #else
     return std::fwrite(data, data_size, length, m_file);
 #endif
-}
-
-bool IOFile::ReadLine(std::string& line) {
-    line.clear();
-
-    char ch;
-    bool read_anything = false;
-
-    while (true) {
-        const std::size_t read = ReadImpl(&ch, sizeof(ch), 1);
-
-        if (read != sizeof(ch)) {
-            return read_anything;
-        }
-        read_anything = true;
-
-        if (ch == '\n') {
-            return true;
-        }
-
-        // Always convert to UNIX style
-        if (ch != '\r') {
-            line.push_back(ch);
-        }
-    }
-}
-
-size_t IOFile::WriteLine(const std::string_view line) {
-    const size_t written_line = WriteImpl(line.data(), line.size(), 1);
-    if (written_line != line.size()) {
-        return written_line;
-    }
-
-    char nl = '\n';
-    const size_t written_nl = WriteImpl(&nl, sizeof(nl), 1);
-    if (written_nl != sizeof(nl)) {
-        return written_nl;
-    }
-
-    return written_line + written_nl;
 }
 
 bool IOFile::Resize(u64 size) {

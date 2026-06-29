@@ -1,11 +1,6 @@
 name: citra-libretro
 
 on:
-  push:
-    branches: [ "*" ]
-    tags: [ "*" ]
-  pull_request:
-    branches: [ master ]
   workflow_dispatch:
 
 env:

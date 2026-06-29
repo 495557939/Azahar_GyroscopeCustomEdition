@@ -346,6 +346,7 @@ string(SUBSTRING "${SETTING_KEY_LIST}" 0 ${SETTING_KEY_LIST_NEW_LENGTH} SETTING_
 # Count keys for explicit array type (avoids std::array CTAD template depth overflow)
 string(REGEX MATCHALL "," KEY_COMMA_LIST "${SETTING_KEY_LIST}")
 list(LENGTH KEY_COMMA_LIST SETTING_KEY_COUNT)
+math(EXPR SETTING_KEY_COUNT "${SETTING_KEY_COUNT} + 1")  # commas = elements - 1
 
 # Configure files
 configure_file("common/setting_keys.h.in" "common/setting_keys.h" @ONLY)

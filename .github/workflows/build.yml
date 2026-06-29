@@ -46,46 +46,6 @@ jobs:
           name: windows-msvc
           path: artifacts/
 
-  # ============ Windows MSYS2 Clang ============
-  windows-msys2:
-    runs-on: windows-latest
-    defaults:
-      run:
-        shell: msys2 {0}
-    env:
-      CCACHE_DIR: ${{ github.workspace }}/.ccache
-      CCACHE_COMPILERCHECK: content
-      CCACHE_SLOPPINESS: time_macros
-      OS: windows
-      TARGET: msys2
-    steps:
-      - uses: actions/checkout@v6
-        with:
-          submodules: recursive
-      - uses: actions/cache@v5
-        with:
-          path: ${{ env.CCACHE_DIR }}
-          key: ${{ runner.os }}-msys2-${{ github.sha }}
-          restore-keys: ${{ runner.os }}-msys2-
-      - uses: msys2/setup-msys2@v2
-        with:
-          msystem: clang64
-          update: true
-          install: git make p7zip
-          pacboy: >-
-            toolchain:p ccache:p cmake:p ninja:p spirv-tools:p
-            qt6-base:p qt6-multimedia:p qt6-multimedia-wmf:p qt6-tools:p qt6-translations:p
-      - name: Disable line ending translation
-        run: git config --global core.autocrlf input
-      - name: Build
-        run: ./.ci/windows.sh
-      - name: Pack
-        run: ./.ci/pack.sh
-      - uses: actions/upload-artifact@v7
-        with:
-          name: windows-msys2
-          path: artifacts/
-
   # ============ Windows MXE (cross-compile) ============
   windows-mxe:
     runs-on: ubuntu-latest

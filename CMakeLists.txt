@@ -89,9 +89,9 @@ if (MSVC)
         /wd5045 # Suppresses `Compiler will insert Spectre mitigation for memory load if /Qspectre switch specified` messages
     )
 else()
-    # Fix GCC 14+ std::array deduction guide hitting template depth limit (256)
-    # with 260+ settings keys on Linux.
-    add_compile_options(-ftemplate-depth=512)
+    # Fix template depth issues: std::array CTAD (260+ settings keys) and
+    # dynarmic cartesian_product on MXE (GCC 15 needs >512).
+    add_compile_options(-ftemplate-depth=1024)
 endif()
 
 # LTO takes too much memory and time using MSVC.

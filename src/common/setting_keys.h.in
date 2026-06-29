@@ -14,7 +14,7 @@ namespace Keys {
 
 @SETTING_KEY_DEFINITIONS@
 
-static const std::array keys_array = {
+static const std::array<const char*, @SETTING_KEY_COUNT@> keys_array = {
 @SETTING_KEY_LIST@
 };
 

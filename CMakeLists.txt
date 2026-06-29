@@ -88,6 +88,10 @@ if (MSVC)
         /wd4711 # Suppresses `function 'xxxxx' selected for automatic inline expansion` messages
         /wd5045 # Suppresses `Compiler will insert Spectre mitigation for memory load if /Qspectre switch specified` messages
     )
+else()
+    # Fix GCC 14+ std::array deduction guide hitting template depth limit (256)
+    # with 260+ settings keys on Linux.
+    add_compile_options(-ftemplate-depth=512)
 endif()
 
 # LTO takes too much memory and time using MSVC.

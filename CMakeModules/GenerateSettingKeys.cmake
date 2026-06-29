@@ -343,6 +343,10 @@ string(LENGTH "${SETTING_KEY_LIST}" SETTING_KEY_LIST_LENGTH)
 math(EXPR SETTING_KEY_LIST_NEW_LENGTH "${SETTING_KEY_LIST_LENGTH} - 1")
 string(SUBSTRING "${SETTING_KEY_LIST}" 0 ${SETTING_KEY_LIST_NEW_LENGTH} SETTING_KEY_LIST)
 
+# Count keys for explicit array type (avoids std::array CTAD template depth overflow)
+string(REGEX MATCHALL "," KEY_COMMA_LIST "${SETTING_KEY_LIST}")
+list(LENGTH KEY_COMMA_LIST SETTING_KEY_COUNT)
+
 # Configure files
 configure_file("common/setting_keys.h.in" "common/setting_keys.h" @ONLY)
 if (ENABLE_QT)

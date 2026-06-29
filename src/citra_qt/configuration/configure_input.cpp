@@ -326,7 +326,7 @@ static QString AnalogToText(const Common::ParamPackage& param, const std::string
         if (param.Has("gc_axis_x") && param.Has("gc_axis_y")) {
             int gx = param.Get("gc_axis_x", 0);
             // LEFTX=0 (CirclePad), RIGHTX=2 (CStick)
-            const char* stick = (gx == 2) ? "R_Stick" : "L_Stick";
+            QString stick = (gx == 2) ? QStringLiteral("R_Stick") : QStringLiteral("L_Stick");
             if (dir == "left")  return QObject::tr("%1_Left").arg(stick);
             if (dir == "right") return QObject::tr("%1_Right").arg(stick);
             if (dir == "up")    return QObject::tr("%1_Up").arg(stick);
